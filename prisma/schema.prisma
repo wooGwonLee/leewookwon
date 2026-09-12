@@ -83,8 +83,28 @@ model User {
   favorites Favorite[]
   reviews   Review[]
   orders    Order[]
+  addresses Address[]
 
   @@map("users")
+}
+
+model Address {
+  id            String   @id @default(uuid())
+  userId        String
+  label         String?
+  recipientName String
+  phone         String
+  postalCode    String
+  address1      String
+  address2      String?
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@map("addresses")
 }
 
 model Favorite {
@@ -124,15 +144,18 @@ enum OrderStatus {
 }
 
 model Order {
-  id         String      @id @default(uuid())
-  userId     String
-  status     OrderStatus @default(PENDING)
-  totalPrice Float
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id                String      @id @default(uuid())
+  userId            String
+  status            OrderStatus @default(PENDING)
+  totalPrice        Float
+  shippingAddressId String?
+  shippingSnapshot  Json?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
-  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items OrderItem[]
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items           OrderItem[]
+  shippingAddress Address?    @relation(fields: [shippingAddressId], references: [id], onDelete: SetNull)
 
   @@map("orders")
 }

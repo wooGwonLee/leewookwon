@@ -4,10 +4,12 @@ import {
   CreateOrderItemInput,
   OrderWithItems,
 } from "../types/order.types";
+import { ShippingSnapshot } from "../types/address.types";
 import { PaginatedResult } from "../types/market.types";
 import { InsufficientStockError } from "./market.service";
+import { AddressNotFoundError } from "./address.service";
 
-export { InsufficientStockError };
+export { InsufficientStockError, AddressNotFoundError };
 export class OrderItemNotFoundError extends Error {}
 export class OrderNotFoundError extends Error {}
 export class ForbiddenOrderActionError extends Error {}
@@ -35,8 +37,28 @@ const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 export async function createOrder(
   userId: string,
   items: CreateOrderItemInput[],
+  addressId?: string,
 ): Promise<OrderWithItems> {
   return prisma.$transaction(async (tx) => {
+    let shippingSnapshot: ShippingSnapshot | undefined;
+    if (addressId) {
+      const address = await tx.address.findUnique({ where: { id: addressId } });
+      // An address that exists but belongs to someone else is just as unusable
+      // to this order as one that doesn't exist at all, so both 404 the same way
+      // (mirrors the marketItemOptionId-belongs-to-a-different-item check below).
+      if (!address || address.userId !== userId) {
+        throw new AddressNotFoundError("Address not found");
+      }
+      shippingSnapshot = {
+        label: address.label,
+        recipientName: address.recipientName,
+        phone: address.phone,
+        postalCode: address.postalCode,
+        address1: address.address1,
+        address2: address.address2,
+      };
+    }
+
     const orderItemsData: {
       marketItemId: string;
       marketItemOptionId?: string;
@@ -82,7 +104,13 @@ export async function createOrder(
       }
     }
     return tx.order.create({
-      data: { userId, totalPrice, items: { create: orderItemsData } },
+      data: {
+        userId,
+        totalPrice,
+        shippingAddressId: addressId,
+        shippingSnapshot: shippingSnapshot as unknown as Prisma.InputJsonValue,
+        items: { create: orderItemsData },
+      },
       include: ORDER_INCLUDE,
     });
   });

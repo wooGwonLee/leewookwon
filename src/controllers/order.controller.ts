@@ -6,6 +6,18 @@ import { CreateOrderItemInput } from "../types/order.types";
 
 const ORDER_STATUS_VALUES = Object.values(OrderStatus);
 
+// Follows the same null-means-absent / undefined-means-invalid convention as
+// parseNonNegativeNumberParam in market.controller.ts.
+function parseAddressId(value: unknown): string | null | undefined {
+  if (value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    return undefined;
+  }
+  return value;
+}
+
 function parseOrderItems(body: unknown): CreateOrderItemInput[] | undefined {
   if (typeof body !== "object" || body === null) {
     return undefined;
@@ -49,18 +61,22 @@ function parseOrderItems(body: unknown): CreateOrderItemInput[] | undefined {
 
 export async function create(req: Request, res: Response): Promise<void> {
   const parsed = parseOrderItems(req.body);
-  if (!parsed) {
+  const addressId = parseAddressId((req.body as Record<string, unknown> | undefined)?.addressId);
+  if (!parsed || addressId === undefined) {
     res.status(400).json({
       error:
-        "items must be a non-empty array of { marketItemId: string, marketItemOptionId?: string, quantity: positive integer } with no duplicate marketItemId+marketItemOptionId entries",
+        "items must be a non-empty array of { marketItemId: string, marketItemOptionId?: string, quantity: positive integer } with no duplicate marketItemId+marketItemOptionId entries; addressId must be a non-empty string if present",
     });
     return;
   }
   try {
-    const order = await orderService.createOrder(req.user!.sub, parsed);
+    const order = await orderService.createOrder(req.user!.sub, parsed, addressId ?? undefined);
     res.status(201).json(order);
   } catch (err) {
-    if (err instanceof orderService.OrderItemNotFoundError) {
+    if (
+      err instanceof orderService.OrderItemNotFoundError ||
+      err instanceof orderService.AddressNotFoundError
+    ) {
       res.status(404).json({ error: err.message });
       return;
     }
