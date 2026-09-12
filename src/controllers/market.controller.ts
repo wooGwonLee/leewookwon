@@ -18,17 +18,51 @@ function parsePositiveIntParam(
   return max ? Math.min(parsed, max) : parsed;
 }
 
+// Returns null if the param is absent (no filter), undefined if present but invalid.
+function parseNonNegativeNumberParam(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
 export async function list(req: Request, res: Response): Promise<void> {
   const page = parsePositiveIntParam(req.query.page, { defaultValue: 1 });
   const limit = parsePositiveIntParam(req.query.limit, {
     defaultValue: DEFAULT_LIMIT,
     max: MAX_LIMIT,
   });
+  const minPrice = parseNonNegativeNumberParam(req.query.minPrice);
+  const maxPrice = parseNonNegativeNumberParam(req.query.maxPrice);
+  const q = typeof req.query.q === "string" && req.query.q.trim() !== "" ? req.query.q : undefined;
+
   if (page === undefined || limit === undefined) {
     res.status(400).json({ error: "page and limit must be positive integers" });
     return;
   }
-  res.json(await marketService.listItems(page, limit));
+  if (minPrice === undefined || maxPrice === undefined) {
+    res.status(400).json({ error: "minPrice and maxPrice must be non-negative numbers" });
+    return;
+  }
+  if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
+    res.status(400).json({ error: "minPrice must not be greater than maxPrice" });
+    return;
+  }
+
+  res.json(
+    await marketService.listItems(page, limit, {
+      q,
+      minPrice: minPrice ?? undefined,
+      maxPrice: maxPrice ?? undefined,
+    }),
+  );
 }
 
 export async function get(req: Request, res: Response): Promise<void> {

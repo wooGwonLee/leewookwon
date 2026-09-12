@@ -25,3 +25,9 @@ export interface PaginatedResult<T> {
   items: T[];
   pagination: PaginationMeta;
 }
+
+export interface MarketItemFilters {
+  q?: string;
+  minPrice?: number;
+  maxPrice?: number;
+}
