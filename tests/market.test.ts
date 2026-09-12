@@ -1,7 +1,16 @@
 import request from "supertest";
 import { createApp } from "../src/app";
+import { prisma } from "../src/db/prisma";
 
 const app = createApp();
+
+beforeEach(async () => {
+  await prisma.marketItem.deleteMany();
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+});
 
 describe("Market items API", () => {
   it("returns an empty list initially", async () => {
@@ -38,5 +47,17 @@ describe("Market items API", () => {
   it("rejects invalid input on create", async () => {
     const res = await request(app).post("/api/market/items").send({ name: "No price" });
     expect(res.status).toBe(400);
+  });
+
+  it("returns 404 when updating or deleting a non-existent item", async () => {
+    const updateRes = await request(app)
+      .patch("/api/market/items/00000000-0000-0000-0000-000000000000")
+      .send({ price: 1 });
+    expect(updateRes.status).toBe(404);
+
+    const deleteRes = await request(app).delete(
+      "/api/market/items/00000000-0000-0000-0000-000000000000",
+    );
+    expect(deleteRes.status).toBe(404);
   });
 });

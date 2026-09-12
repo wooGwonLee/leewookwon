@@ -1,51 +1,45 @@
-import { randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
+import { prisma } from "../db/prisma";
 import {
   CreateMarketItemInput,
   MarketItem,
   UpdateMarketItemInput,
 } from "../types/market.types";
 
-const items = new Map<string, MarketItem>();
-
-export function listItems(): MarketItem[] {
-  return Array.from(items.values());
+export function listItems(): Promise<MarketItem[]> {
+  return prisma.marketItem.findMany({ orderBy: { createdAt: "asc" } });
 }
 
-export function getItem(id: string): MarketItem | undefined {
-  return items.get(id);
+export function getItem(id: string): Promise<MarketItem | null> {
+  return prisma.marketItem.findUnique({ where: { id } });
 }
 
-export function createItem(input: CreateMarketItemInput): MarketItem {
-  const now = new Date().toISOString();
-  const item: MarketItem = {
-    id: randomUUID(),
-    name: input.name,
-    price: input.price,
-    description: input.description,
-    createdAt: now,
-    updatedAt: now,
-  };
-  items.set(item.id, item);
-  return item;
+export function createItem(input: CreateMarketItemInput): Promise<MarketItem> {
+  return prisma.marketItem.create({ data: input });
 }
 
-export function updateItem(
+export async function updateItem(
   id: string,
   input: UpdateMarketItemInput,
-): MarketItem | undefined {
-  const existing = items.get(id);
-  if (!existing) {
-    return undefined;
+): Promise<MarketItem | undefined> {
+  try {
+    return await prisma.marketItem.update({ where: { id }, data: input });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+      return undefined;
+    }
+    throw err;
   }
-  const updated: MarketItem = {
-    ...existing,
-    ...input,
-    updatedAt: new Date().toISOString(),
-  };
-  items.set(id, updated);
-  return updated;
 }
 
-export function deleteItem(id: string): boolean {
-  return items.delete(id);
+export async function deleteItem(id: string): Promise<boolean> {
+  try {
+    await prisma.marketItem.delete({ where: { id } });
+    return true;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+      return false;
+    }
+    throw err;
+  }
 }
