@@ -2,8 +2,10 @@ import { Router } from "express";
 import * as marketController from "../controllers/market.controller";
 import * as favoriteController from "../controllers/favorite.controller";
 import * as reviewController from "../controllers/review.controller";
+import * as imageController from "../controllers/image.controller";
 import { asyncHandler } from "../utils/asyncHandler";
 import { authenticate, authorize } from "../middleware/auth.middleware";
+import { handleImageUpload } from "../middleware/upload.middleware";
 
 const router = Router();
 
@@ -21,5 +23,13 @@ router.get("/:id/reviews", asyncHandler(reviewController.list));
 router.post("/:id/reviews", authenticate, asyncHandler(reviewController.create));
 router.patch("/:id/reviews/:reviewId", authenticate, asyncHandler(reviewController.update));
 router.delete("/:id/reviews/:reviewId", authenticate, asyncHandler(reviewController.remove));
+
+router.post(
+  "/:id/images",
+  authenticate,
+  handleImageUpload,
+  asyncHandler(imageController.upload),
+);
+router.delete("/:id/images/:imageId", authenticate, asyncHandler(imageController.remove));
 
 export default router;
