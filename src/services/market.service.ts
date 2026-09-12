@@ -3,18 +3,31 @@ import { prisma } from "../db/prisma";
 import {
   CreateMarketItemInput,
   MarketItemFilters,
-  MarketItemWithFavoriteCount,
+  MarketItemWithAggregates,
   PaginatedResult,
   UpdateMarketItemInput,
 } from "../types/market.types";
+import { getAverageRatings } from "./rating.util";
 
-type ItemWithFavoriteCount = Prisma.MarketItemGetPayload<{
-  include: { _count: { select: { favorites: true } } };
+type ItemWithCounts = Prisma.MarketItemGetPayload<{
+  include: { _count: { select: { favorites: true; reviews: true } } };
 }>;
 
-function withFavoriteCount(item: ItemWithFavoriteCount): MarketItemWithFavoriteCount {
+const ITEM_COUNTS_INCLUDE = {
+  _count: { select: { favorites: true, reviews: true } },
+} satisfies Prisma.MarketItemInclude;
+
+function withAggregates(
+  item: ItemWithCounts,
+  averageRatings: Map<string, number>,
+): MarketItemWithAggregates {
   const { _count, ...rest } = item;
-  return { ...rest, favoriteCount: _count.favorites };
+  return {
+    ...rest,
+    favoriteCount: _count.favorites,
+    reviewCount: _count.reviews,
+    averageRating: averageRatings.get(item.id) ?? null,
+  };
 }
 
 function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
@@ -41,7 +54,7 @@ export async function listItems(
   page: number,
   limit: number,
   filters: MarketItemFilters = {},
-): Promise<PaginatedResult<MarketItemWithFavoriteCount>> {
+): Promise<PaginatedResult<MarketItemWithAggregates>> {
   const where = buildWhere(filters);
   const [items, total] = await Promise.all([
     prisma.marketItem.findMany({
@@ -49,17 +62,18 @@ export async function listItems(
       orderBy: { createdAt: "asc" },
       skip: (page - 1) * limit,
       take: limit,
-      include: { _count: { select: { favorites: true } } },
+      include: ITEM_COUNTS_INCLUDE,
     }),
     prisma.marketItem.count({ where }),
   ]);
+  const averageRatings = await getAverageRatings(items.map((i) => i.id));
   return {
-    items: items.map(withFavoriteCount),
+    items: items.map((item) => withAggregates(item, averageRatings)),
     pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
   };
 }
 
-export async function getItem(id: string): Promise<MarketItemWithFavoriteCount | null> {
+export async function getItem(id: string): Promise<MarketItemWithAggregates | null> {
   // Raw update so viewing an item bumps viewCount without touching the
   // @updatedAt-managed updatedAt column (which should reflect content edits).
   const affectedRows = await prisma.$executeRaw`
@@ -70,28 +84,34 @@ export async function getItem(id: string): Promise<MarketItemWithFavoriteCount |
   }
   const item = await prisma.marketItem.findUnique({
     where: { id },
-    include: { _count: { select: { favorites: true } } },
+    include: ITEM_COUNTS_INCLUDE,
   });
-  return item ? withFavoriteCount(item) : null;
+  if (!item) {
+    return null;
+  }
+  const averageRatings = await getAverageRatings([id]);
+  return withAggregates(item, averageRatings);
 }
 
-export function createItem(input: CreateMarketItemInput): Promise<MarketItemWithFavoriteCount> {
-  return prisma.marketItem
-    .create({ data: input, include: { _count: { select: { favorites: true } } } })
-    .then(withFavoriteCount);
+export async function createItem(
+  input: CreateMarketItemInput,
+): Promise<MarketItemWithAggregates> {
+  const item = await prisma.marketItem.create({ data: input, include: ITEM_COUNTS_INCLUDE });
+  return withAggregates(item, new Map());
 }
 
 export async function updateItem(
   id: string,
   input: UpdateMarketItemInput,
-): Promise<MarketItemWithFavoriteCount | undefined> {
+): Promise<MarketItemWithAggregates | undefined> {
   try {
     const item = await prisma.marketItem.update({
       where: { id },
       data: input,
-      include: { _count: { select: { favorites: true } } },
+      include: ITEM_COUNTS_INCLUDE,
     });
-    return withFavoriteCount(item);
+    const averageRatings = await getAverageRatings([id]);
+    return withAggregates(item, averageRatings);
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return undefined;

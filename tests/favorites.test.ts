@@ -13,6 +13,7 @@ async function registerAndLogin(email: string): Promise<string> {
 }
 
 beforeEach(async () => {
+  await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();
   await prisma.marketItem.deleteMany();
   await prisma.user.deleteMany();

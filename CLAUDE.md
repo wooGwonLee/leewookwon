@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Lint: `npm run lint`
 - Run all tests: `npm test` (requires `DATABASE_URL` and `JWT_SECRET` env vars, and a reachable
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
+  (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`)
   share one real database and would otherwise race each other)
 - Run a single test file: `npx jest tests/market.test.ts` (append `--runInBand` if running
   alongside other suites against the same database)
@@ -81,11 +82,35 @@ per-user liking (`src/services/favorite.service.ts`, `src/controllers/favorite.c
 - `GET /api/market/favorites` — auth required; the current user's favorited items, paginated
   (same `{ items, pagination }` shape as the market item list).
 
-Every market item response (list, detail, create, update, and the favorites list above) includes
-`favoriteCount`. This is attached via `withFavoriteCount` in `src/services/market.service.ts`,
-which shapes a Prisma `include: { _count: { select: { favorites: true } } }` result into
-`MarketItemWithFavoriteCount` (`src/types/market.types.ts`) — reuse that helper/type rather than
-recomputing the count separately if you add another endpoint that returns market items.
+## Reviews & ratings
+
+A `Review` row (`userId` + `marketItemId`, unique together — one review per user per item, both
+`onDelete: Cascade`) backs ratings/comments (`src/services/review.service.ts`,
+`src/controllers/review.controller.ts`):
+
+- `POST /api/market/items/:id/reviews` — create (auth required); body `{ rating: 1-5 integer,
+  comment?: string }`. 201 on success, 400 on an invalid/missing rating or non-string comment, 404
+  if the item doesn't exist, 409 if this user already reviewed the item (use `PATCH` to edit
+  instead — unlike favorites, a duplicate review is a real conflict, not idempotent).
+- `PATCH /api/market/items/:id/reviews/:reviewId` — edit own review (auth required); 403 if you're
+  not the review's author, 404 if it doesn't exist.
+- `DELETE /api/market/items/:id/reviews/:reviewId` — delete (auth required); allowed for the
+  review's author OR an `ADMIN`, 403 otherwise, 404 if it doesn't exist.
+- `GET /api/market/items/:id/reviews` — public, paginated (same `{ items, pagination }` shape).
+
+## Aggregates on market item responses
+
+Every market item response (list, detail, create, update, and the favorites list) includes
+`favoriteCount`, `reviewCount`, and `averageRating` (rounded to 1 decimal, `null` if there are no
+reviews yet) via `MarketItemWithAggregates` (`src/types/market.types.ts`). In
+`src/services/market.service.ts`, `withAggregates` shapes a Prisma
+`include: { _count: { select: { favorites: true, reviews: true } } }` result (giving
+`favoriteCount`/`reviewCount` in the same query, no N+1) plus a separately-fetched rating map from
+`getAverageRatings` (`src/services/rating.util.ts`, a `prisma.review.groupBy` — one extra query
+regardless of how many items are in the result set, never per-item). `favorite.service.ts`'s
+`listUserFavorites` follows the same pattern. Reuse `getAverageRatings`/`withAggregates` rather
+than recomputing counts or averages separately if you add another endpoint that returns market
+items.
 
 ## Architecture
 
@@ -109,18 +134,26 @@ route -> controller -> service pattern:
   `/api/market/favorites` in `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
   above).
+- `src/utils/pagination.ts` — `parsePagination(query)` parses/validates `page`/`limit` (default
+  20, capped at 100); reused by every paginated list controller rather than reimplemented per
+  controller.
 - `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts`,
-  `src/controllers/favorite.controller.ts` — parse/validate request data, call the service layer,
-  shape HTTP responses/status codes.
+  `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts` —
+  parse/validate request data, call the service layer, shape HTTP responses/status codes.
 - `src/services/market.service.ts`, `src/services/auth.service.ts`,
-  `src/services/favorite.service.ts` — business logic and data access, backed by Prisma
-  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`). This is the layer to touch if the
-  persistence approach changes; the controller/route layers don't need to know it's Postgres.
-- `src/types/market.types.ts`, `src/types/auth.types.ts` — shared TypeScript types, re-exporting
-  Prisma-generated types (`MarketItem`, `Role`) alongside request input shapes.
-- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role`/`Favorite` models and datasource config;
-  `prisma/migrations/` holds the generated SQL migrations (commit these alongside schema changes).
+  `src/services/favorite.service.ts`, `src/services/review.service.ts`,
+  `src/services/rating.util.ts` — business logic and data access, backed by Prisma
+  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`). This is the layer to
+  touch if the persistence approach changes; the controller/route layers don't need to know it's
+  Postgres.
+- `src/types/market.types.ts`, `src/types/auth.types.ts`, `src/types/review.types.ts` — shared
+  TypeScript types, re-exporting Prisma-generated types (`MarketItem`, `Role`, `Review`) alongside
+  request input shapes.
+- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role`/`Favorite`/`Review` models and datasource
+  config; `prisma/migrations/` holds the generated SQL migrations (commit these alongside schema
+  changes).
 
-Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`) use `supertest`
-against the app built by `createApp()` and hit the real database configured by `DATABASE_URL` —
-they don't start a real network listener, but they are integration tests, not pure unit tests.
+Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
+`tests/reviews.test.ts`) use `supertest` against the app built by `createApp()` and hit the real
+database configured by `DATABASE_URL` — they don't start a real network listener, but they are
+integration tests, not pure unit tests.

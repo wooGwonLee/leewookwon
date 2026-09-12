@@ -17,6 +17,7 @@ model MarketItem {
   updatedAt   DateTime @updatedAt
 
   favorites Favorite[]
+  reviews   Review[]
 
   @@map("market_items")
 }
@@ -35,6 +36,7 @@ model User {
   updatedAt    DateTime @updatedAt
 
   favorites Favorite[]
+  reviews   Review[]
 
   @@map("users")
 }
@@ -50,4 +52,20 @@ model Favorite {
 
   @@unique([userId, marketItemId])
   @@map("favorites")
+}
+
+model Review {
+  id           String   @id @default(uuid())
+  userId       String
+  marketItemId String
+  rating       Int
+  comment      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  marketItem MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, marketItemId])
+  @@map("reviews")
 }
