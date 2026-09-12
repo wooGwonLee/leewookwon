@@ -45,6 +45,15 @@ bcrypt (`bcryptjs`); tokens are signed with `JWT_SECRET` (`src/config.ts`) and c
   require `authenticate`; deleting (`DELETE`) additionally requires `authorize("ADMIN")`. Follow
   this same `authenticate [, authorize(...)]` pattern when adding new protected routes.
 
+## Pagination
+
+`GET /api/market/items` takes `page` (default 1) and `limit` (default 20, capped at 100) query
+params and returns `{ items, pagination: { page, limit, total, totalPages } }` rather than a bare
+array — a non-integer or non-positive `page`/`limit` returns 400. `marketService.listItems(page,
+limit)` (`src/services/market.service.ts`) does the `skip`/`take` + `count` query; follow the same
+shape (`PaginatedResult<T>` in `src/types/market.types.ts`) for any other list endpoint added
+later.
+
 ## Architecture
 
 Node.js/TypeScript/Express backend API for the "market" feature. Layout follows a standard

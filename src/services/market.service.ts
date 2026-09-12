@@ -3,11 +3,23 @@ import { prisma } from "../db/prisma";
 import {
   CreateMarketItemInput,
   MarketItem,
+  PaginatedResult,
   UpdateMarketItemInput,
 } from "../types/market.types";
 
-export function listItems(): Promise<MarketItem[]> {
-  return prisma.marketItem.findMany({ orderBy: { createdAt: "asc" } });
+export async function listItems(page: number, limit: number): Promise<PaginatedResult<MarketItem>> {
+  const [items, total] = await Promise.all([
+    prisma.marketItem.findMany({
+      orderBy: { createdAt: "asc" },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.marketItem.count(),
+  ]);
+  return {
+    items,
+    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+  };
 }
 
 export function getItem(id: string): Promise<MarketItem | null> {
