@@ -39,6 +39,7 @@ export async function list(req: Request, res: Response): Promise<void> {
   const q = typeof req.query.q === "string" && req.query.q.trim() !== "" ? req.query.q : undefined;
   const sortBy = parseSortBy(req.query.sortBy);
   const sortOrder = parseSortOrder(req.query.sortOrder);
+  const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId : undefined;
 
   if (!pagination) {
     res.status(400).json({ error: "page and limit must be positive integers" });
@@ -65,7 +66,7 @@ export async function list(req: Request, res: Response): Promise<void> {
     await marketService.listItems(
       pagination.page,
       pagination.limit,
-      { q, minPrice: minPrice ?? undefined, maxPrice: maxPrice ?? undefined },
+      { q, minPrice: minPrice ?? undefined, maxPrice: maxPrice ?? undefined, categoryId },
       { sortBy, sortOrder },
     ),
   );
@@ -81,22 +82,47 @@ export async function get(req: Request, res: Response): Promise<void> {
 }
 
 export async function create(req: Request, res: Response): Promise<void> {
-  const { name, price, description } = req.body;
+  const { name, price, description, categoryId } = req.body;
   if (typeof name !== "string" || typeof price !== "number") {
     res.status(400).json({ error: "name (string) and price (number) are required" });
     return;
   }
-  const item = await marketService.createItem({ name, price, description });
-  res.status(201).json(item);
+  if (categoryId !== undefined && typeof categoryId !== "string") {
+    res.status(400).json({ error: "categoryId must be a string" });
+    return;
+  }
+  try {
+    const item = await marketService.createItem({ name, price, description, categoryId });
+    res.status(201).json(item);
+  } catch (err) {
+    if (err instanceof marketService.InvalidCategoryError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function update(req: Request, res: Response): Promise<void> {
-  const item = await marketService.updateItem(req.params.id, req.body);
-  if (!item) {
-    res.status(404).json({ error: "Item not found" });
+  const { categoryId } = req.body;
+  if (categoryId !== undefined && categoryId !== null && typeof categoryId !== "string") {
+    res.status(400).json({ error: "categoryId must be a string or null" });
     return;
   }
-  res.json(item);
+  try {
+    const item = await marketService.updateItem(req.params.id, req.body);
+    if (!item) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err) {
+    if (err instanceof marketService.InvalidCategoryError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function remove(req: Request, res: Response): Promise<void> {

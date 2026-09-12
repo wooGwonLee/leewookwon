@@ -13,14 +13,27 @@ model MarketItem {
   price       Float
   description String?
   viewCount   Int      @default(0)
+  categoryId  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   favorites Favorite[]
   reviews   Review[]
   images    MarketItemImage[]
+  category  Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@map("market_items")
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items MarketItem[]
+
+  @@map("categories")
 }
 
 model MarketItemImage {

@@ -66,6 +66,7 @@ export async function listUserFavorites(
           include: {
             _count: { select: { favorites: true, reviews: true } },
             images: { orderBy: { createdAt: "asc" } },
+            category: true,
           },
         },
       },
