@@ -31,3 +31,5 @@ export interface MarketItemFilters {
   minPrice?: number;
   maxPrice?: number;
 }
+
+export type MarketItemWithFavoriteCount = MarketItem & { favoriteCount: number };

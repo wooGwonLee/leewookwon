@@ -16,6 +16,8 @@ model MarketItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  favorites Favorite[]
+
   @@map("market_items")
 }
 
@@ -32,5 +34,20 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  favorites Favorite[]
+
   @@map("users")
+}
+
+model Favorite {
+  id           String   @id @default(uuid())
+  userId       String
+  marketItemId String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  marketItem MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, marketItemId])
+  @@map("favorites")
 }

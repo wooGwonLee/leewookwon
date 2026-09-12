@@ -2,11 +2,20 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
   CreateMarketItemInput,
-  MarketItem,
   MarketItemFilters,
+  MarketItemWithFavoriteCount,
   PaginatedResult,
   UpdateMarketItemInput,
 } from "../types/market.types";
+
+type ItemWithFavoriteCount = Prisma.MarketItemGetPayload<{
+  include: { _count: { select: { favorites: true } } };
+}>;
+
+function withFavoriteCount(item: ItemWithFavoriteCount): MarketItemWithFavoriteCount {
+  const { _count, ...rest } = item;
+  return { ...rest, favoriteCount: _count.favorites };
+}
 
 function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
   const where: Prisma.MarketItemWhereInput = {};
@@ -32,7 +41,7 @@ export async function listItems(
   page: number,
   limit: number,
   filters: MarketItemFilters = {},
-): Promise<PaginatedResult<MarketItem>> {
+): Promise<PaginatedResult<MarketItemWithFavoriteCount>> {
   const where = buildWhere(filters);
   const [items, total] = await Promise.all([
     prisma.marketItem.findMany({
@@ -40,16 +49,17 @@ export async function listItems(
       orderBy: { createdAt: "asc" },
       skip: (page - 1) * limit,
       take: limit,
+      include: { _count: { select: { favorites: true } } },
     }),
     prisma.marketItem.count({ where }),
   ]);
   return {
-    items,
+    items: items.map(withFavoriteCount),
     pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
   };
 }
 
-export async function getItem(id: string): Promise<MarketItem | null> {
+export async function getItem(id: string): Promise<MarketItemWithFavoriteCount | null> {
   // Raw update so viewing an item bumps viewCount without touching the
   // @updatedAt-managed updatedAt column (which should reflect content edits).
   const affectedRows = await prisma.$executeRaw`
@@ -58,19 +68,30 @@ export async function getItem(id: string): Promise<MarketItem | null> {
   if (affectedRows === 0) {
     return null;
   }
-  return prisma.marketItem.findUnique({ where: { id } });
+  const item = await prisma.marketItem.findUnique({
+    where: { id },
+    include: { _count: { select: { favorites: true } } },
+  });
+  return item ? withFavoriteCount(item) : null;
 }
 
-export function createItem(input: CreateMarketItemInput): Promise<MarketItem> {
-  return prisma.marketItem.create({ data: input });
+export function createItem(input: CreateMarketItemInput): Promise<MarketItemWithFavoriteCount> {
+  return prisma.marketItem
+    .create({ data: input, include: { _count: { select: { favorites: true } } } })
+    .then(withFavoriteCount);
 }
 
 export async function updateItem(
   id: string,
   input: UpdateMarketItemInput,
-): Promise<MarketItem | undefined> {
+): Promise<MarketItemWithFavoriteCount | undefined> {
   try {
-    return await prisma.marketItem.update({ where: { id }, data: input });
+    const item = await prisma.marketItem.update({
+      where: { id },
+      data: input,
+      include: { _count: { select: { favorites: true } } },
+    });
+    return withFavoriteCount(item);
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return undefined;

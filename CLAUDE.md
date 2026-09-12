@@ -67,6 +67,26 @@ content edits (`update`/`create`), not views. If you add another "increment a co
 field, follow the same raw-update approach rather than `update()`, or it will silently start
 touching `updatedAt`.
 
+## Favorites (likes)
+
+A `Favorite` join row (`userId` + `marketItemId`, unique together, both `onDelete: Cascade`) backs
+per-user liking (`src/services/favorite.service.ts`, `src/controllers/favorite.controller.ts`):
+
+- `POST /api/market/items/:id/favorite` — add (auth required); 201 if newly created, 200 if
+  already favorited (idempotent, not an error), 404 if the item doesn't exist.
+- `DELETE /api/market/items/:id/favorite` — remove (auth required); 204 if removed, 404 if not
+  currently favorited.
+- `GET /api/market/items/:id/favorite` — auth required; `{ favorited, favoriteCount }` for the
+  current user.
+- `GET /api/market/favorites` — auth required; the current user's favorited items, paginated
+  (same `{ items, pagination }` shape as the market item list).
+
+Every market item response (list, detail, create, update, and the favorites list above) includes
+`favoriteCount`. This is attached via `withFavoriteCount` in `src/services/market.service.ts`,
+which shapes a Prisma `include: { _count: { select: { favorites: true } } }` result into
+`MarketItemWithFavoriteCount` (`src/types/market.types.ts`) — reuse that helper/type rather than
+recomputing the count separately if you add another endpoint that returns market items.
+
 ## Architecture
 
 Node.js/TypeScript/Express backend API for the "market" feature. Layout follows a standard
@@ -81,21 +101,26 @@ route -> controller -> service pattern:
   a new client elsewhere.
 - `src/config.ts` — reads/validates process env (e.g. `JWT_SECRET`, `JWT_EXPIRES_IN`); read env
   vars through here rather than `process.env` directly.
-- `src/routes/market.routes.ts`, `src/routes/auth.routes.ts` — map HTTP verbs/paths to controller
-  functions, wrapped in `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected promises reach
-  the error-handling middleware instead of crashing silently.
+- `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts` —
+  map HTTP verbs/paths to controller functions, wrapped in `asyncHandler`
+  (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling middleware instead of
+  crashing silently. The item-scoped favorite routes (`/:id/favorite`) live in
+  `market.routes.ts`; the "my favorites" list route lives in `favorites.routes.ts`, mounted at
+  `/api/market/favorites` in `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
   above).
-- `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts` — parse/validate
-  request data, call the service layer, shape HTTP responses/status codes.
-- `src/services/market.service.ts`, `src/services/auth.service.ts` — business logic and data
-  access, backed by Prisma (`prisma.marketItem`, `prisma.user`). This is the layer to touch if the
+- `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts`,
+  `src/controllers/favorite.controller.ts` — parse/validate request data, call the service layer,
+  shape HTTP responses/status codes.
+- `src/services/market.service.ts`, `src/services/auth.service.ts`,
+  `src/services/favorite.service.ts` — business logic and data access, backed by Prisma
+  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`). This is the layer to touch if the
   persistence approach changes; the controller/route layers don't need to know it's Postgres.
 - `src/types/market.types.ts`, `src/types/auth.types.ts` — shared TypeScript types, re-exporting
   Prisma-generated types (`MarketItem`, `Role`) alongside request input shapes.
-- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role` models and datasource config;
+- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role`/`Favorite` models and datasource config;
   `prisma/migrations/` holds the generated SQL migrations (commit these alongside schema changes).
 
-Tests (`tests/market.test.ts`, `tests/auth.test.ts`) use `supertest` against the app built by
-`createApp()` and hit the real database configured by `DATABASE_URL` — they don't start a real
-network listener, but they are integration tests, not pure unit tests.
+Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`) use `supertest`
+against the app built by `createApp()` and hit the real database configured by `DATABASE_URL` —
+they don't start a real network listener, but they are integration tests, not pure unit tests.
