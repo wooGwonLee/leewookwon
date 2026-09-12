@@ -67,6 +67,7 @@ export async function listUserFavorites(
             _count: { select: { favorites: true, reviews: true } },
             images: { orderBy: { createdAt: "asc" } },
             category: true,
+            options: { orderBy: { createdAt: "asc" } },
           },
         },
       },

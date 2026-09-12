@@ -18,6 +18,7 @@ type ItemWithCounts = Prisma.MarketItemGetPayload<{
     _count: { select: { favorites: true; reviews: true } };
     images: true;
     category: true;
+    options: true;
   };
 }>;
 
@@ -25,6 +26,7 @@ const ITEM_COUNTS_INCLUDE = {
   _count: { select: { favorites: true, reviews: true } },
   images: { orderBy: { createdAt: "asc" } },
   category: true,
+  options: { orderBy: { createdAt: "asc" } },
 } satisfies Prisma.MarketItemInclude;
 
 export class InvalidCategoryError extends Error {}

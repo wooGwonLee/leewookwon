@@ -20,18 +20,29 @@ function parseOrderItems(body: unknown): CreateOrderItemInput[] | undefined {
     if (typeof raw !== "object" || raw === null) {
       return undefined;
     }
-    const { marketItemId, quantity } = raw as Record<string, unknown>;
+    const { marketItemId, marketItemOptionId, quantity } = raw as Record<string, unknown>;
     if (typeof marketItemId !== "string" || marketItemId.trim() === "") {
+      return undefined;
+    }
+    if (
+      marketItemOptionId !== undefined &&
+      (typeof marketItemOptionId !== "string" || marketItemOptionId.trim() === "")
+    ) {
       return undefined;
     }
     if (!Number.isInteger(quantity) || (quantity as number) < 1) {
       return undefined;
     }
-    if (seen.has(marketItemId)) {
+    const dedupeKey = `${marketItemId}::${marketItemOptionId ?? ""}`;
+    if (seen.has(dedupeKey)) {
       return undefined;
     }
-    seen.add(marketItemId);
-    parsed.push({ marketItemId, quantity: quantity as number });
+    seen.add(dedupeKey);
+    parsed.push({
+      marketItemId,
+      marketItemOptionId: marketItemOptionId as string | undefined,
+      quantity: quantity as number,
+    });
   }
   return parsed;
 }
@@ -41,7 +52,7 @@ export async function create(req: Request, res: Response): Promise<void> {
   if (!parsed) {
     res.status(400).json({
       error:
-        "items must be a non-empty array of { marketItemId: string, quantity: positive integer } with no duplicate marketItemId entries",
+        "items must be a non-empty array of { marketItemId: string, marketItemOptionId?: string, quantity: positive integer } with no duplicate marketItemId+marketItemOptionId entries",
     });
     return;
   }

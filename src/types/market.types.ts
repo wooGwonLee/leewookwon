@@ -1,4 +1,4 @@
-import { Category, MarketItem, MarketItemImage } from "@prisma/client";
+import { Category, MarketItem, MarketItemImage, MarketItemOption } from "@prisma/client";
 
 export type { MarketItem, MarketItemImage };
 
@@ -62,4 +62,5 @@ export type MarketItemWithAggregates = MarketItem & {
   averageRating: number | null;
   images: MarketItemImage[];
   category: Category | null;
+  options: MarketItemOption[];
 };

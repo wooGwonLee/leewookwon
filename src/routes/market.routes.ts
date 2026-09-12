@@ -3,6 +3,7 @@ import * as marketController from "../controllers/market.controller";
 import * as favoriteController from "../controllers/favorite.controller";
 import * as reviewController from "../controllers/review.controller";
 import * as imageController from "../controllers/image.controller";
+import * as optionController from "../controllers/option.controller";
 import { asyncHandler } from "../utils/asyncHandler";
 import { authenticate, authorize } from "../middleware/auth.middleware";
 import { handleImageUpload } from "../middleware/upload.middleware";
@@ -32,5 +33,9 @@ router.post(
   asyncHandler(imageController.upload),
 );
 router.delete("/:id/images/:imageId", authenticate, asyncHandler(imageController.remove));
+
+router.post("/:id/options", authenticate, asyncHandler(optionController.create));
+router.patch("/:id/options/:optionId", authenticate, asyncHandler(optionController.update));
+router.delete("/:id/options/:optionId", authenticate, asyncHandler(optionController.remove));
 
 export default router;
