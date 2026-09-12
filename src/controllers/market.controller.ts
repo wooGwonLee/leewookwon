@@ -161,10 +161,18 @@ export async function adjustStock(req: Request, res: Response): Promise<void> {
 }
 
 export async function remove(req: Request, res: Response): Promise<void> {
-  const deleted = await marketService.deleteItem(req.params.id);
-  if (!deleted) {
-    res.status(404).json({ error: "Item not found" });
-    return;
+  try {
+    const deleted = await marketService.deleteItem(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    res.status(204).send();
+  } catch (err) {
+    if (err instanceof marketService.ItemHasOrdersError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
   }
-  res.status(204).send();
 }

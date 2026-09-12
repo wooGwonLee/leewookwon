@@ -30,6 +30,7 @@ async function createItem(token: string): Promise<string> {
 }
 
 beforeEach(async () => {
+  await prisma.order.deleteMany();
   await prisma.marketItemImage.deleteMany();
   await prisma.review.deleteMany();
   await prisma.favorite.deleteMany();

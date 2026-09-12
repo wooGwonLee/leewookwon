@@ -18,10 +18,11 @@ model MarketItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  favorites Favorite[]
-  reviews   Review[]
-  images    MarketItemImage[]
-  category  Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  favorites  Favorite[]
+  reviews    Review[]
+  images     MarketItemImage[]
+  category   Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  orderItems OrderItem[]
 
   @@map("market_items")
 }
@@ -64,6 +65,7 @@ model User {
 
   favorites Favorite[]
   reviews   Review[]
+  orders    Order[]
 
   @@map("users")
 }
@@ -95,4 +97,38 @@ model Review {
 
   @@unique([userId, marketItemId])
   @@map("reviews")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+
+model Order {
+  id         String      @id @default(uuid())
+  userId     String
+  status     OrderStatus @default(PENDING)
+  totalPrice Float
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String @id @default(uuid())
+  orderId      String
+  marketItemId String
+  quantity     Int
+  priceAtOrder Float
+
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  marketItem MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Restrict)
+
+  @@map("order_items")
 }

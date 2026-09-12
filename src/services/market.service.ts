@@ -29,6 +29,7 @@ const ITEM_COUNTS_INCLUDE = {
 
 export class InvalidCategoryError extends Error {}
 export class InsufficientStockError extends Error {}
+export class ItemHasOrdersError extends Error {}
 
 function withAggregates(
   item: ItemWithCounts,
@@ -198,8 +199,13 @@ export async function deleteItem(id: string): Promise<boolean> {
   try {
     await prisma.marketItem.delete({ where: { id } });
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
-      return false;
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      if (err.code === "P2025") {
+        return false;
+      }
+      if (err.code === "P2003") {
+        throw new ItemHasOrdersError("Cannot delete an item that has existing orders");
+      }
     }
     throw err;
   }
