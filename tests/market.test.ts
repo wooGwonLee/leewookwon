@@ -28,10 +28,11 @@ afterAll(async () => {
 });
 
 describe("Market items API", () => {
-  it("returns an empty list initially", async () => {
+  it("returns an empty page initially", async () => {
     const res = await request(app).get("/api/market/items");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body.items).toEqual([]);
+    expect(res.body.pagination).toEqual({ page: 1, limit: 20, total: 0, totalPages: 1 });
   });
 
   it("rejects creating an item without authentication", async () => {
@@ -102,5 +103,50 @@ describe("Market items API", () => {
       .delete("/api/market/items/00000000-0000-0000-0000-000000000000")
       .set("Authorization", `Bearer ${adminToken}`);
     expect(deleteRes.status).toBe(404);
+  });
+
+  describe("pagination", () => {
+    beforeEach(async () => {
+      const userToken = await registerAndLogin("paginator@example.com", "USER");
+      for (let i = 0; i < 5; i += 1) {
+        await request(app)
+          .post("/api/market/items")
+          .set("Authorization", `Bearer ${userToken}`)
+          .send({ name: `Item ${i}`, price: i });
+      }
+    });
+
+    it("applies default page and limit", async () => {
+      const res = await request(app).get("/api/market/items");
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(5);
+      expect(res.body.pagination).toEqual({ page: 1, limit: 20, total: 5, totalPages: 1 });
+    });
+
+    it("paginates using page and limit query params", async () => {
+      const firstPage = await request(app).get("/api/market/items?page=1&limit=2");
+      expect(firstPage.status).toBe(200);
+      expect(firstPage.body.items).toHaveLength(2);
+      expect(firstPage.body.pagination).toEqual({ page: 1, limit: 2, total: 5, totalPages: 3 });
+
+      const secondPage = await request(app).get("/api/market/items?page=2&limit=2");
+      expect(secondPage.body.items).toHaveLength(2);
+      expect(secondPage.body.items[0].name).toBe("Item 2");
+
+      const lastPage = await request(app).get("/api/market/items?page=3&limit=2");
+      expect(lastPage.body.items).toHaveLength(1);
+    });
+
+    it("caps limit at 100 and rejects non-positive-integer params", async () => {
+      const overLimit = await request(app).get("/api/market/items?limit=1000");
+      expect(overLimit.status).toBe(200);
+      expect(overLimit.body.pagination.limit).toBe(100);
+
+      const invalidPage = await request(app).get("/api/market/items?page=0");
+      expect(invalidPage.status).toBe(400);
+
+      const nonNumericLimit = await request(app).get("/api/market/items?limit=abc");
+      expect(nonNumericLimit.status).toBe(400);
+    });
   });
 });
