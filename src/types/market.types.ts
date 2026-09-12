@@ -1,6 +1,6 @@
-import { MarketItem } from "@prisma/client";
+import { MarketItem, MarketItemImage } from "@prisma/client";
 
-export type { MarketItem };
+export type { MarketItem, MarketItemImage };
 
 export interface CreateMarketItemInput {
   name: string;
@@ -36,4 +36,5 @@ export type MarketItemWithAggregates = MarketItem & {
   favoriteCount: number;
   reviewCount: number;
   averageRating: number | null;
+  images: MarketItemImage[];
 };

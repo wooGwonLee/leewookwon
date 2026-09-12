@@ -18,8 +18,21 @@ model MarketItem {
 
   favorites Favorite[]
   reviews   Review[]
+  images    MarketItemImage[]
 
   @@map("market_items")
+}
+
+model MarketItemImage {
+  id           String   @id @default(uuid())
+  marketItemId String
+  url          String
+  filename     String
+  createdAt    DateTime @default(now())
+
+  marketItem MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Cascade)
+
+  @@map("market_item_images")
 }
 
 enum Role {

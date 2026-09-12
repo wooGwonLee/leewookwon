@@ -1,3 +1,5 @@
+import fs from "fs/promises";
+import path from "path";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import {
@@ -8,13 +10,15 @@ import {
   UpdateMarketItemInput,
 } from "../types/market.types";
 import { getAverageRatings } from "./rating.util";
+import { MARKET_ITEM_IMAGES_DIR } from "../upload";
 
 type ItemWithCounts = Prisma.MarketItemGetPayload<{
-  include: { _count: { select: { favorites: true; reviews: true } } };
+  include: { _count: { select: { favorites: true; reviews: true } }; images: true };
 }>;
 
 const ITEM_COUNTS_INCLUDE = {
   _count: { select: { favorites: true, reviews: true } },
+  images: { orderBy: { createdAt: "asc" } },
 } satisfies Prisma.MarketItemInclude;
 
 function withAggregates(
@@ -121,13 +125,21 @@ export async function updateItem(
 }
 
 export async function deleteItem(id: string): Promise<boolean> {
+  // Fetch image filenames before the cascade delete removes the DB rows,
+  // so the files on disk can be cleaned up too (otherwise they're orphaned).
+  const images = await prisma.marketItemImage.findMany({ where: { marketItemId: id } });
   try {
     await prisma.marketItem.delete({ where: { id } });
-    return true;
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return false;
     }
     throw err;
   }
+  await Promise.all(
+    images.map((image) =>
+      fs.unlink(path.join(MARKET_ITEM_IMAGES_DIR, image.filename)).catch(() => undefined),
+    ),
+  );
+  return true;
 }

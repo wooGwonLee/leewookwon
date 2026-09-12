@@ -62,7 +62,12 @@ export async function listUserFavorites(
       skip: (page - 1) * limit,
       take: limit,
       include: {
-        marketItem: { include: { _count: { select: { favorites: true, reviews: true } } } },
+        marketItem: {
+          include: {
+            _count: { select: { favorites: true, reviews: true } },
+            images: { orderBy: { createdAt: "asc" } },
+          },
+        },
       },
     }),
     prisma.favorite.count({ where }),

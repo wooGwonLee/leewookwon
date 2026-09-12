@@ -12,7 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run all tests: `npm test` (requires `DATABASE_URL` and `JWT_SECRET` env vars, and a reachable
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
   (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`,
-  `tests/users.test.ts`) share one real database and would otherwise race each other)
+  `tests/users.test.ts`, `tests/images.test.ts`) share one real database — and, for images, the
+  same `uploads/` directory on disk — and would otherwise race each other)
 - Run a single test file: `npx jest tests/market.test.ts` (append `--runInBand` if running
   alongside other suites against the same database)
 - Run a single test by name: `npx jest -t "creates, fetches, updates as a regular user, and deletes as an admin"`
@@ -104,6 +105,31 @@ A `Review` row (`userId` + `marketItemId`, unique together — one review per us
   review's author OR an `ADMIN`, 403 otherwise, 404 if it doesn't exist.
 - `GET /api/market/items/:id/reviews` — public, paginated (same `{ items, pagination }` shape).
 
+## Product images
+
+Images are stored on local disk under `uploads/market-items/` (gitignored; created at startup by
+`ensureUploadDirs()` in `src/upload.ts`) and served statically at `/uploads/...`
+(`app.use("/uploads", express.static(UPLOADS_ROOT))` in `src/app.ts`). This is fine for local
+dev/single-instance deployments; a real multi-instance or ephemeral-filesystem deployment should
+swap the storage backend (e.g. S3) — the `MarketItemImage.url` field is the seam to change.
+
+- `POST /api/market/items/:id/images` — auth required; multipart form, field name `images` (up to
+  5 files per request, JPEG/PNG/WEBP/GIF only, 5MB max each — see `src/upload.ts`). 201 with
+  `{ images: [...] }` on success, 400 for no files/wrong type/too large/too many (translated from
+  multer's error via `handleImageUpload` in `src/middleware/upload.middleware.ts`, so it's a JSON
+  400 rather than a raw 500), 404 if the item doesn't exist (any files multer already wrote to
+  disk before the item-existence check are cleaned up in that case —
+  `src/services/image.service.ts`).
+- `DELETE /api/market/items/:id/images/:imageId` — auth required; 204 and deletes both the DB row
+  and the file on disk, 404 if the image doesn't exist (or belongs to a different item).
+- Every market item response's `images` array (ordered oldest-first) comes from the same
+  `ITEM_COUNTS_INCLUDE` used for favorite/review counts (`src/services/market.service.ts`) — add
+  new image-derived fields there, not as a separate query.
+- `marketService.deleteItem` fetches each image's filename before the cascade delete removes the
+  `MarketItemImage` rows, then unlinks those files from disk afterward — otherwise deleting an
+  item would silently orphan its image files. Follow the same fetch-before/unlink-after pattern
+  for any other endpoint that deletes a `MarketItem`.
+
 ## Aggregates on market item responses
 
 Every market item response (list, detail, create, update, and the favorites list) includes
@@ -132,38 +158,40 @@ route -> controller -> service pattern:
   a new client elsewhere.
 - `src/config.ts` — reads/validates process env (e.g. `JWT_SECRET`, `JWT_EXPIRES_IN`); read env
   vars through here rather than `process.env` directly.
+- `src/upload.ts` — multer config (`uploadMarketItemImages`) and upload-directory constants/setup
+  (`ensureUploadDirs`, `UPLOADS_ROOT`, `MARKET_ITEM_IMAGES_DIR`); see Product images below.
 - `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts`,
   `src/routes/users.routes.ts` — map HTTP verbs/paths to controller functions, wrapped in
   `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling
-  middleware instead of crashing silently. The item-scoped favorite/review routes
-  (`/:id/favorite`, `/:id/reviews`) live in `market.routes.ts`; the "my favorites" list route
-  lives in `favorites.routes.ts` (mounted at `/api/market/favorites`); admin user management
-  lives in `users.routes.ts` (mounted at `/api/users`) — all in `src/app.ts`.
+  middleware instead of crashing silently. The item-scoped favorite/review/image routes
+  (`/:id/favorite`, `/:id/reviews`, `/:id/images`) live in `market.routes.ts`; the "my favorites"
+  list route lives in `favorites.routes.ts` (mounted at `/api/market/favorites`); admin user
+  management lives in `users.routes.ts` (mounted at `/api/users`) — all in `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
-  above).
+  above). `src/middleware/upload.middleware.ts` — `handleImageUpload` wraps the multer middleware
+  so its errors become JSON 400s instead of uncaught exceptions.
 - `src/utils/pagination.ts` — `parsePagination(query)` parses/validates `page`/`limit` (default
   20, capped at 100); reused by every paginated list controller rather than reimplemented per
   controller.
 - `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts`,
   `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts`,
-  `src/controllers/user.controller.ts` — parse/validate request data, call the service layer,
-  shape HTTP responses/status codes.
+  `src/controllers/user.controller.ts`, `src/controllers/image.controller.ts` — parse/validate
+  request data, call the service layer, shape HTTP responses/status codes.
 - `src/services/market.service.ts`, `src/services/auth.service.ts`,
   `src/services/favorite.service.ts`, `src/services/review.service.ts`,
-  `src/services/user.service.ts`, `src/services/rating.util.ts` — business logic and data access,
-  backed by Prisma (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`). This
-  is the layer to
-  touch if the persistence approach changes; the controller/route layers don't need to know it's
-  Postgres.
+  `src/services/user.service.ts`, `src/services/image.service.ts`, `src/services/rating.util.ts`
+  — business logic and data access, backed by Prisma (`prisma.marketItem`, `prisma.user`,
+  `prisma.favorite`, `prisma.review`, `prisma.marketItemImage`). This is the layer to touch if the
+  persistence approach changes; the controller/route layers don't need to know it's Postgres (or,
+  for images, local disk).
 - `src/types/market.types.ts`, `src/types/auth.types.ts`, `src/types/review.types.ts` — shared
-  TypeScript types, re-exporting Prisma-generated types (`MarketItem`, `Role`, `Review`) alongside
-  request input shapes.
-- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role`/`Favorite`/`Review` models and datasource
-  config; `prisma/migrations/` holds the generated SQL migrations (commit these alongside schema
-  changes).
+  TypeScript types, re-exporting Prisma-generated types (`MarketItem`, `MarketItemImage`, `Role`,
+  `Review`) alongside request input shapes.
+- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role`/`Favorite`/`Review`/`MarketItemImage`
+  models and datasource config; `prisma/migrations/` holds the generated SQL migrations (commit
+  these alongside schema changes).
 
 Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
-`tests/reviews.test.ts`, `tests/users.test.ts`) use `supertest` against the app built by
-`createApp()` and hit the real database configured by `DATABASE_URL` — they don't start a real
-network listener, but they are
-integration tests, not pure unit tests.
+`tests/reviews.test.ts`, `tests/users.test.ts`, `tests/images.test.ts`) use `supertest` against
+the app built by `createApp()` and hit the real database configured by `DATABASE_URL` — they
+don't start a real network listener, but they are integration tests, not pure unit tests.
