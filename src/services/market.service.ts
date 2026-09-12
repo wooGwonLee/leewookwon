@@ -28,6 +28,7 @@ const ITEM_COUNTS_INCLUDE = {
 } satisfies Prisma.MarketItemInclude;
 
 export class InvalidCategoryError extends Error {}
+export class InsufficientStockError extends Error {}
 
 function withAggregates(
   item: ItemWithCounts,
@@ -40,6 +41,15 @@ function withAggregates(
     reviewCount: _count.reviews,
     averageRating: averageRatings.get(item.id) ?? null,
   };
+}
+
+async function fetchItemWithAggregates(id: string): Promise<MarketItemWithAggregates | undefined> {
+  const item = await prisma.marketItem.findUnique({ where: { id }, include: ITEM_COUNTS_INCLUDE });
+  if (!item) {
+    return undefined;
+  }
+  const averageRatings = await getAverageRatings([id]);
+  return withAggregates(item, averageRatings);
 }
 
 function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
@@ -61,6 +71,10 @@ function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
 
   if (filters.categoryId !== undefined) {
     where.categoryId = filters.categoryId;
+  }
+
+  if (filters.inStock) {
+    where.stock = { gt: 0 };
   }
 
   return where;
@@ -114,15 +128,7 @@ export async function getItem(id: string): Promise<MarketItemWithAggregates | nu
   if (affectedRows === 0) {
     return null;
   }
-  const item = await prisma.marketItem.findUnique({
-    where: { id },
-    include: ITEM_COUNTS_INCLUDE,
-  });
-  if (!item) {
-    return null;
-  }
-  const averageRatings = await getAverageRatings([id]);
-  return withAggregates(item, averageRatings);
+  return (await fetchItemWithAggregates(id)) ?? null;
 }
 
 export async function createItem(
@@ -162,6 +168,27 @@ export async function updateItem(
     }
     throw err;
   }
+}
+
+export async function adjustStock(
+  id: string,
+  delta: number,
+): Promise<MarketItemWithAggregates | undefined> {
+  // A single conditional UPDATE (stock + delta as the new value, gated on the
+  // resulting stock never going negative) so concurrent adjustments can't
+  // race each other into an inconsistent stock count.
+  const result = await prisma.marketItem.updateMany({
+    where: delta < 0 ? { id, stock: { gte: -delta } } : { id },
+    data: { stock: { increment: delta } },
+  });
+  if (result.count > 0) {
+    return fetchItemWithAggregates(id);
+  }
+  const exists = await prisma.marketItem.findUnique({ where: { id } });
+  if (!exists) {
+    return undefined;
+  }
+  throw new InsufficientStockError("Adjustment would make stock negative");
 }
 
 export async function deleteItem(id: string): Promise<boolean> {

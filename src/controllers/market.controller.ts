@@ -40,6 +40,7 @@ export async function list(req: Request, res: Response): Promise<void> {
   const sortBy = parseSortBy(req.query.sortBy);
   const sortOrder = parseSortOrder(req.query.sortOrder);
   const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId : undefined;
+  const inStock = req.query.inStock === "true" ? true : undefined;
 
   if (!pagination) {
     res.status(400).json({ error: "page and limit must be positive integers" });
@@ -66,7 +67,7 @@ export async function list(req: Request, res: Response): Promise<void> {
     await marketService.listItems(
       pagination.page,
       pagination.limit,
-      { q, minPrice: minPrice ?? undefined, maxPrice: maxPrice ?? undefined, categoryId },
+      { q, minPrice: minPrice ?? undefined, maxPrice: maxPrice ?? undefined, categoryId, inStock },
       { sortBy, sortOrder },
     ),
   );
@@ -81,8 +82,12 @@ export async function get(req: Request, res: Response): Promise<void> {
   res.json(item);
 }
 
+function isNonNegativeInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 export async function create(req: Request, res: Response): Promise<void> {
-  const { name, price, description, categoryId } = req.body;
+  const { name, price, description, categoryId, stock } = req.body;
   if (typeof name !== "string" || typeof price !== "number") {
     res.status(400).json({ error: "name (string) and price (number) are required" });
     return;
@@ -91,8 +96,12 @@ export async function create(req: Request, res: Response): Promise<void> {
     res.status(400).json({ error: "categoryId must be a string" });
     return;
   }
+  if (stock !== undefined && !isNonNegativeInteger(stock)) {
+    res.status(400).json({ error: "stock must be a non-negative integer" });
+    return;
+  }
   try {
-    const item = await marketService.createItem({ name, price, description, categoryId });
+    const item = await marketService.createItem({ name, price, description, categoryId, stock });
     res.status(201).json(item);
   } catch (err) {
     if (err instanceof marketService.InvalidCategoryError) {
@@ -104,9 +113,13 @@ export async function create(req: Request, res: Response): Promise<void> {
 }
 
 export async function update(req: Request, res: Response): Promise<void> {
-  const { categoryId } = req.body;
+  const { categoryId, stock } = req.body;
   if (categoryId !== undefined && categoryId !== null && typeof categoryId !== "string") {
     res.status(400).json({ error: "categoryId must be a string or null" });
+    return;
+  }
+  if (stock !== undefined && !isNonNegativeInteger(stock)) {
+    res.status(400).json({ error: "stock must be a non-negative integer" });
     return;
   }
   try {
@@ -119,6 +132,28 @@ export async function update(req: Request, res: Response): Promise<void> {
   } catch (err) {
     if (err instanceof marketService.InvalidCategoryError) {
       res.status(400).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function adjustStock(req: Request, res: Response): Promise<void> {
+  const { delta } = req.body;
+  if (typeof delta !== "number" || !Number.isInteger(delta) || delta === 0) {
+    res.status(400).json({ error: "delta must be a non-zero integer" });
+    return;
+  }
+  try {
+    const item = await marketService.adjustStock(req.params.id, delta);
+    if (!item) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    res.json(item);
+  } catch (err) {
+    if (err instanceof marketService.InsufficientStockError) {
+      res.status(409).json({ error: err.message });
       return;
     }
     throw err;

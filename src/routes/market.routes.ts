@@ -14,6 +14,7 @@ router.get("/:id", asyncHandler(marketController.get));
 router.post("/", authenticate, asyncHandler(marketController.create));
 router.patch("/:id", authenticate, asyncHandler(marketController.update));
 router.delete("/:id", authenticate, authorize("ADMIN"), asyncHandler(marketController.remove));
+router.patch("/:id/stock", authenticate, asyncHandler(marketController.adjustStock));
 
 router.get("/:id/favorite", authenticate, asyncHandler(favoriteController.getStatus));
 router.post("/:id/favorite", authenticate, asyncHandler(favoriteController.add));

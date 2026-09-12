@@ -12,9 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run all tests: `npm test` (requires `DATABASE_URL` and `JWT_SECRET` env vars, and a reachable
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
   (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`,
-  `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`) share one real
-  database — and, for images, the same `uploads/` directory on disk — and would otherwise race
-  each other)
+  `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`, `tests/stock.test.ts`)
+  share one real database — and, for images, the same `uploads/` directory on disk — and would
+  otherwise race each other)
 - Run a single test file: `npx jest tests/market.test.ts` (append `--runInBand` if running
   alongside other suites against the same database)
 - Run a single test by name: `npx jest -t "creates, fetches, updates as a regular user, and deletes as an admin"`
@@ -60,16 +60,18 @@ bcrypt (`bcryptjs`); tokens are signed with `JWT_SECRET` (`src/config.ts`) and c
 params and returns `{ items, pagination: { page, limit, total, totalPages } }` rather than a bare
 array — a non-integer or non-positive `page`/`limit` returns 400. It also takes an optional `q`
 (case-insensitive substring match against `name` OR `description`), `minPrice`/`maxPrice`
-(inclusive price range; a negative, non-numeric, or inverted min/max returns 400), and
-`categoryId` (exact match; an unknown/nonexistent id just yields an empty page, not an error —
-see Categories below for why filtering doesn't validate the id).
+(inclusive price range; a negative, non-numeric, or inverted min/max returns 400), `categoryId`
+(exact match; an unknown/nonexistent id just yields an empty page, not an error — see Categories
+below for why filtering doesn't validate the id), and `inStock` (`inStock=true` restricts to
+`stock > 0`; any other value, including omitted, applies no stock filter — see Stock / inventory
+below).
 `marketService.listItems(page, limit, filters, sort)` (`src/services/market.service.ts`) builds a
 `Prisma.MarketItemWhereInput` from the filters, runs `findMany`/`count` in parallel, and returns
 `PaginatedResult<T>` (`src/types/market.types.ts`) — follow the same pattern for other list
 endpoints added later.
 
 Sorting: `sortBy` (one of `SORTABLE_FIELDS` in `src/types/market.types.ts` —
-`createdAt`/`price`/`viewCount`/`name`/`favoriteCount`/`reviewCount`; default `createdAt`) and
+`createdAt`/`price`/`viewCount`/`name`/`favoriteCount`/`reviewCount`/`stock`; default `createdAt`) and
 `sortOrder` (`asc` | `desc`; default `asc`) — either being present but invalid returns 400.
 `buildOrderBy` in `market.service.ts` sorts `favoriteCount`/`reviewCount` via Prisma's relation
 `_count` ordering (`orderBy: { favorites: { _count: sortOrder } }`) rather than a raw query, and
@@ -175,6 +177,35 @@ Market items reference a category optionally:
   the same `ITEM_COUNTS_INCLUDE` used for favorites/reviews/images (`src/services/market.service.ts`)
   — add it there, not as a separate query, same as the other relations on this include.
 
+## Stock / inventory
+
+`MarketItem.stock` (`Int`, default 0, never negative) tracks how many units of an item are
+available (`src/services/market.service.ts`, `src/controllers/market.controller.ts`):
+
+- `POST`/`PATCH /api/market/items` accept an optional `stock` in the body (create defaults to 0
+  when omitted; update leaves it unchanged when omitted) — validated as a non-negative integer
+  (`isNonNegativeInteger` in `market.controller.ts`), 400 otherwise. This is a direct set, meant
+  for correcting/initializing stock, not for recording a sale/restock — use the endpoint below for
+  that.
+- `PATCH /api/market/items/:id/stock` — auth required; body `{ delta: <non-zero integer> }`
+  (positive to restock, negative to record a sale/reservation). 400 if `delta` is zero, fractional,
+  or not a number. 404 if the item doesn't exist. 409 (`InsufficientStockError`) if applying `delta`
+  would take `stock` below 0 — the stock is left unchanged in that case. 200 with the updated item
+  on success.
+- `marketService.adjustStock` applies the delta via a single conditional
+  `prisma.marketItem.updateMany({ where: delta < 0 ? { id, stock: { gte: -delta } } : { id }, data:
+  { stock: { increment: delta } } } })` rather than a read-then-write — the `WHERE` clause itself
+  gates the update on the resulting stock staying non-negative, so concurrent decrements can't race
+  each other into a negative count (verified under concurrent load: 15 simultaneous `-1` deltas
+  against `stock=10` yielded exactly 10 successes and 5 `409`s, landing at `stock=0`, never
+  negative). If `updateMany`'s `count` is 0, a follow-up `findUnique` distinguishes "item doesn't
+  exist" (404) from "item exists but the delta was rejected" (409) — don't replace this with a plain
+  `update()` plus a manual negative check, since that reintroduces the race.
+- `GET /api/market/items?inStock=true` filters to `stock > 0` (see Pagination section above);
+  `stock` is also a valid `sortBy` value.
+- Follow this same conditional-`updateMany` pattern for any future "adjust a counter but never let
+  it go negative/over a cap" field, rather than a naive read-modify-write.
+
 ## Aggregates on market item responses
 
 Every market item response (list, detail, create, update, and the favorites list) includes
@@ -241,7 +272,7 @@ route -> controller -> service pattern:
   alongside schema changes).
 
 Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
-`tests/reviews.test.ts`, `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`)
-use `supertest` against the app built by `createApp()` and hit the real database configured by
-`DATABASE_URL` — they don't start a real network listener, but they are integration tests, not
-pure unit tests.
+`tests/reviews.test.ts`, `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`,
+`tests/stock.test.ts`) use `supertest` against the app built by `createApp()` and hit the real
+database configured by `DATABASE_URL` — they don't start a real network listener, but they are
+integration tests, not pure unit tests.
