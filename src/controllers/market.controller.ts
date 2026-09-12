@@ -1,22 +1,6 @@
 import { Request, Response } from "express";
 import * as marketService from "../services/market.service";
-
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
-
-function parsePositiveIntParam(
-  value: unknown,
-  { defaultValue, max }: { defaultValue: number; max?: number },
-): number | undefined {
-  if (value === undefined) {
-    return defaultValue;
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return undefined;
-  }
-  return max ? Math.min(parsed, max) : parsed;
-}
+import { parsePagination } from "../utils/pagination";
 
 // Returns null if the param is absent (no filter), undefined if present but invalid.
 function parseNonNegativeNumberParam(value: unknown): number | null | undefined {
@@ -34,16 +18,12 @@ function parseNonNegativeNumberParam(value: unknown): number | null | undefined 
 }
 
 export async function list(req: Request, res: Response): Promise<void> {
-  const page = parsePositiveIntParam(req.query.page, { defaultValue: 1 });
-  const limit = parsePositiveIntParam(req.query.limit, {
-    defaultValue: DEFAULT_LIMIT,
-    max: MAX_LIMIT,
-  });
+  const pagination = parsePagination(req.query as Record<string, unknown>);
   const minPrice = parseNonNegativeNumberParam(req.query.minPrice);
   const maxPrice = parseNonNegativeNumberParam(req.query.maxPrice);
   const q = typeof req.query.q === "string" && req.query.q.trim() !== "" ? req.query.q : undefined;
 
-  if (page === undefined || limit === undefined) {
+  if (!pagination) {
     res.status(400).json({ error: "page and limit must be positive integers" });
     return;
   }
@@ -57,7 +37,7 @@ export async function list(req: Request, res: Response): Promise<void> {
   }
 
   res.json(
-    await marketService.listItems(page, limit, {
+    await marketService.listItems(pagination.page, pagination.limit, {
       q,
       minPrice: minPrice ?? undefined,
       maxPrice: maxPrice ?? undefined,

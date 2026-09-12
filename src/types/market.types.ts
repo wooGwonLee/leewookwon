@@ -32,4 +32,8 @@ export interface MarketItemFilters {
   maxPrice?: number;
 }
 
-export type MarketItemWithFavoriteCount = MarketItem & { favoriteCount: number };
+export type MarketItemWithAggregates = MarketItem & {
+  favoriteCount: number;
+  reviewCount: number;
+  averageRating: number | null;
+};

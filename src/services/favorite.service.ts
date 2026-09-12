@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
-import { MarketItemWithFavoriteCount, PaginatedResult } from "../types/market.types";
+import { MarketItemWithAggregates, PaginatedResult } from "../types/market.types";
+import { getAverageRatings } from "./rating.util";
 
 export class MarketItemNotFoundError extends Error {}
 
@@ -52,7 +53,7 @@ export async function listUserFavorites(
   userId: string,
   page: number,
   limit: number,
-): Promise<PaginatedResult<MarketItemWithFavoriteCount>> {
+): Promise<PaginatedResult<MarketItemWithAggregates>> {
   const where = { userId };
   const [favorites, total] = await Promise.all([
     prisma.favorite.findMany({
@@ -60,14 +61,24 @@ export async function listUserFavorites(
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
-      include: { marketItem: { include: { _count: { select: { favorites: true } } } } },
+      include: {
+        marketItem: { include: { _count: { select: { favorites: true, reviews: true } } } },
+      },
     }),
     prisma.favorite.count({ where }),
   ]);
+
+  const averageRatings = await getAverageRatings(favorites.map((f) => f.marketItem.id));
+
   return {
     items: favorites.map((f) => {
       const { _count, ...rest } = f.marketItem;
-      return { ...rest, favoriteCount: _count.favorites };
+      return {
+        ...rest,
+        favoriteCount: _count.favorites,
+        reviewCount: _count.reviews,
+        averageRating: averageRatings.get(f.marketItem.id) ?? null,
+      };
     }),
     pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
   };
