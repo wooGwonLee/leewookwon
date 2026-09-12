@@ -53,17 +53,28 @@ bcrypt (`bcryptjs`); tokens are signed with `JWT_SECRET` (`src/config.ts`) and c
   require `authenticate`; deleting (`DELETE`) additionally requires `authorize("ADMIN")`. Follow
   this same `authenticate [, authorize(...)]` pattern when adding new protected routes.
 
-## Pagination, search & filtering
+## Pagination, search, filtering & sorting
 
 `GET /api/market/items` takes `page` (default 1) and `limit` (default 20, capped at 100) query
 params and returns `{ items, pagination: { page, limit, total, totalPages } }` rather than a bare
 array — a non-integer or non-positive `page`/`limit` returns 400. It also takes an optional `q`
 (case-insensitive substring match against `name` OR `description`) and `minPrice`/`maxPrice`
 (inclusive price range; a negative, non-numeric, or inverted min/max returns 400).
-`marketService.listItems(page, limit, filters)` (`src/services/market.service.ts`) builds a
+`marketService.listItems(page, limit, filters, sort)` (`src/services/market.service.ts`) builds a
 `Prisma.MarketItemWhereInput` from the filters, runs `findMany`/`count` in parallel, and returns
 `PaginatedResult<T>` (`src/types/market.types.ts`) — follow the same pattern for other list
 endpoints added later.
+
+Sorting: `sortBy` (one of `SORTABLE_FIELDS` in `src/types/market.types.ts` —
+`createdAt`/`price`/`viewCount`/`name`/`favoriteCount`/`reviewCount`; default `createdAt`) and
+`sortOrder` (`asc` | `desc`; default `asc`) — either being present but invalid returns 400.
+`buildOrderBy` in `market.service.ts` sorts `favoriteCount`/`reviewCount` via Prisma's relation
+`_count` ordering (`orderBy: { favorites: { _count: sortOrder } }`) rather than a raw query, and
+always appends `{ id: "asc" }` as a tiebreaker so pagination stays deterministic when many items
+share the same sort-field value (e.g. the same price). `averageRating` is intentionally NOT
+sortable — Prisma has no built-in way to order by a relation's average, and doing it correctly
+would need a raw/grouped query outside this pattern; if that's ever needed, it's a separate query
+shape; don't bolt it onto `buildOrderBy`.
 
 ## View count
 

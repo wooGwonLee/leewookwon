@@ -32,6 +32,23 @@ export interface MarketItemFilters {
   maxPrice?: number;
 }
 
+export const SORTABLE_FIELDS = [
+  "createdAt",
+  "price",
+  "viewCount",
+  "name",
+  "favoriteCount",
+  "reviewCount",
+] as const;
+
+export type SortableField = (typeof SORTABLE_FIELDS)[number];
+export type SortOrder = "asc" | "desc";
+
+export interface MarketItemSort {
+  sortBy: SortableField;
+  sortOrder: SortOrder;
+}
+
 export type MarketItemWithAggregates = MarketItem & {
   favoriteCount: number;
   reviewCount: number;

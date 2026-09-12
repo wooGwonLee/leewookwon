@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import * as marketService from "../services/market.service";
 import { parsePagination } from "../utils/pagination";
+import { SORTABLE_FIELDS, SortableField, SortOrder } from "../types/market.types";
 
 // Returns null if the param is absent (no filter), undefined if present but invalid.
 function parseNonNegativeNumberParam(value: unknown): number | null | undefined {
@@ -17,11 +18,27 @@ function parseNonNegativeNumberParam(value: unknown): number | null | undefined 
   return parsed;
 }
 
+function parseSortBy(value: unknown): SortableField | undefined {
+  if (value === undefined) {
+    return "createdAt";
+  }
+  return SORTABLE_FIELDS.includes(value as SortableField) ? (value as SortableField) : undefined;
+}
+
+function parseSortOrder(value: unknown): SortOrder | undefined {
+  if (value === undefined) {
+    return "asc";
+  }
+  return value === "asc" || value === "desc" ? value : undefined;
+}
+
 export async function list(req: Request, res: Response): Promise<void> {
   const pagination = parsePagination(req.query as Record<string, unknown>);
   const minPrice = parseNonNegativeNumberParam(req.query.minPrice);
   const maxPrice = parseNonNegativeNumberParam(req.query.maxPrice);
   const q = typeof req.query.q === "string" && req.query.q.trim() !== "" ? req.query.q : undefined;
+  const sortBy = parseSortBy(req.query.sortBy);
+  const sortOrder = parseSortOrder(req.query.sortOrder);
 
   if (!pagination) {
     res.status(400).json({ error: "page and limit must be positive integers" });
@@ -35,13 +52,22 @@ export async function list(req: Request, res: Response): Promise<void> {
     res.status(400).json({ error: "minPrice must not be greater than maxPrice" });
     return;
   }
+  if (sortBy === undefined) {
+    res.status(400).json({ error: `sortBy must be one of: ${SORTABLE_FIELDS.join(", ")}` });
+    return;
+  }
+  if (sortOrder === undefined) {
+    res.status(400).json({ error: "sortOrder must be one of: asc, desc" });
+    return;
+  }
 
   res.json(
-    await marketService.listItems(pagination.page, pagination.limit, {
-      q,
-      minPrice: minPrice ?? undefined,
-      maxPrice: maxPrice ?? undefined,
-    }),
+    await marketService.listItems(
+      pagination.page,
+      pagination.limit,
+      { q, minPrice: minPrice ?? undefined, maxPrice: maxPrice ?? undefined },
+      { sortBy, sortOrder },
+    ),
   );
 }
 
