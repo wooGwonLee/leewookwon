@@ -3,18 +3,45 @@ import { prisma } from "../db/prisma";
 import {
   CreateMarketItemInput,
   MarketItem,
+  MarketItemFilters,
   PaginatedResult,
   UpdateMarketItemInput,
 } from "../types/market.types";
 
-export async function listItems(page: number, limit: number): Promise<PaginatedResult<MarketItem>> {
+function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
+  const where: Prisma.MarketItemWhereInput = {};
+
+  if (filters.q) {
+    where.OR = [
+      { name: { contains: filters.q, mode: "insensitive" } },
+      { description: { contains: filters.q, mode: "insensitive" } },
+    ];
+  }
+
+  if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
+    where.price = {
+      ...(filters.minPrice !== undefined && { gte: filters.minPrice }),
+      ...(filters.maxPrice !== undefined && { lte: filters.maxPrice }),
+    };
+  }
+
+  return where;
+}
+
+export async function listItems(
+  page: number,
+  limit: number,
+  filters: MarketItemFilters = {},
+): Promise<PaginatedResult<MarketItem>> {
+  const where = buildWhere(filters);
   const [items, total] = await Promise.all([
     prisma.marketItem.findMany({
+      where,
       orderBy: { createdAt: "asc" },
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.marketItem.count(),
+    prisma.marketItem.count({ where }),
   ]);
   return {
     items,

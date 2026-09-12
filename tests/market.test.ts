@@ -149,4 +149,70 @@ describe("Market items API", () => {
       expect(nonNumericLimit.status).toBe(400);
     });
   });
+
+  describe("search and filtering", () => {
+    let userToken: string;
+
+    beforeEach(async () => {
+      userToken = await registerAndLogin("searcher@example.com", "USER");
+      const seed = [
+        { name: "Red Bicycle", price: 100, description: "A sturdy commuter bike" },
+        { name: "Blue Bicycle", price: 150, description: "Lightweight road bike" },
+        { name: "Red Scooter", price: 80, description: "Foldable electric scooter" },
+        { name: "Skateboard", price: 50, description: "Maple deck, red wheels" },
+      ];
+      for (const item of seed) {
+        await request(app)
+          .post("/api/market/items")
+          .set("Authorization", `Bearer ${userToken}`)
+          .send(item);
+      }
+    });
+
+    it("searches by name, case-insensitively", async () => {
+      const res = await request(app).get("/api/market/items?q=bicycle");
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(2);
+      expect(res.body.items.map((i: { name: string }) => i.name).sort()).toEqual([
+        "Blue Bicycle",
+        "Red Bicycle",
+      ]);
+    });
+
+    it("searches across the description field too", async () => {
+      const res = await request(app).get("/api/market/items?q=red wheels");
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(1);
+      expect(res.body.items[0].name).toBe("Skateboard");
+    });
+
+    it("filters by price range", async () => {
+      const res = await request(app).get("/api/market/items?minPrice=80&maxPrice=100");
+      expect(res.status).toBe(200);
+      expect(res.body.items.map((i: { name: string }) => i.name).sort()).toEqual([
+        "Red Bicycle",
+        "Red Scooter",
+      ]);
+    });
+
+    it("combines search and price filters", async () => {
+      const res = await request(app).get("/api/market/items?q=red&maxPrice=90");
+      expect(res.status).toBe(200);
+      expect(res.body.items.map((i: { name: string }) => i.name).sort()).toEqual([
+        "Red Scooter",
+        "Skateboard",
+      ]);
+    });
+
+    it("rejects invalid price filter params", async () => {
+      const negative = await request(app).get("/api/market/items?minPrice=-5");
+      expect(negative.status).toBe(400);
+
+      const nonNumeric = await request(app).get("/api/market/items?maxPrice=abc");
+      expect(nonNumeric.status).toBe(400);
+
+      const inverted = await request(app).get("/api/market/items?minPrice=100&maxPrice=50");
+      expect(inverted.status).toBe(400);
+    });
+  });
 });
