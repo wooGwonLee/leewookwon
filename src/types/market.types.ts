@@ -1,4 +1,4 @@
-import { MarketItem, MarketItemImage } from "@prisma/client";
+import { Category, MarketItem, MarketItemImage } from "@prisma/client";
 
 export type { MarketItem, MarketItemImage };
 
@@ -6,12 +6,14 @@ export interface CreateMarketItemInput {
   name: string;
   price: number;
   description?: string;
+  categoryId?: string;
 }
 
 export interface UpdateMarketItemInput {
   name?: string;
   price?: number;
   description?: string;
+  categoryId?: string | null;
 }
 
 export interface PaginationMeta {
@@ -30,6 +32,7 @@ export interface MarketItemFilters {
   q?: string;
   minPrice?: number;
   maxPrice?: number;
+  categoryId?: string;
 }
 
 export const SORTABLE_FIELDS = [
@@ -54,4 +57,5 @@ export type MarketItemWithAggregates = MarketItem & {
   reviewCount: number;
   averageRating: number | null;
   images: MarketItemImage[];
+  category: Category | null;
 };

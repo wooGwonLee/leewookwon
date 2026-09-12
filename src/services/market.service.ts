@@ -14,13 +14,20 @@ import { getAverageRatings } from "./rating.util";
 import { MARKET_ITEM_IMAGES_DIR } from "../upload";
 
 type ItemWithCounts = Prisma.MarketItemGetPayload<{
-  include: { _count: { select: { favorites: true; reviews: true } }; images: true };
+  include: {
+    _count: { select: { favorites: true; reviews: true } };
+    images: true;
+    category: true;
+  };
 }>;
 
 const ITEM_COUNTS_INCLUDE = {
   _count: { select: { favorites: true, reviews: true } },
   images: { orderBy: { createdAt: "asc" } },
+  category: true,
 } satisfies Prisma.MarketItemInclude;
+
+export class InvalidCategoryError extends Error {}
 
 function withAggregates(
   item: ItemWithCounts,
@@ -50,6 +57,10 @@ function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
       ...(filters.minPrice !== undefined && { gte: filters.minPrice }),
       ...(filters.maxPrice !== undefined && { lte: filters.maxPrice }),
     };
+  }
+
+  if (filters.categoryId !== undefined) {
+    where.categoryId = filters.categoryId;
   }
 
   return where;
@@ -117,8 +128,15 @@ export async function getItem(id: string): Promise<MarketItemWithAggregates | nu
 export async function createItem(
   input: CreateMarketItemInput,
 ): Promise<MarketItemWithAggregates> {
-  const item = await prisma.marketItem.create({ data: input, include: ITEM_COUNTS_INCLUDE });
-  return withAggregates(item, new Map());
+  try {
+    const item = await prisma.marketItem.create({ data: input, include: ITEM_COUNTS_INCLUDE });
+    return withAggregates(item, new Map());
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2003") {
+      throw new InvalidCategoryError("categoryId does not refer to an existing category");
+    }
+    throw err;
+  }
 }
 
 export async function updateItem(
@@ -134,8 +152,13 @@ export async function updateItem(
     const averageRatings = await getAverageRatings([id]);
     return withAggregates(item, averageRatings);
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
-      return undefined;
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      if (err.code === "P2025") {
+        return undefined;
+      }
+      if (err.code === "P2003") {
+        throw new InvalidCategoryError("categoryId does not refer to an existing category");
+      }
     }
     throw err;
   }

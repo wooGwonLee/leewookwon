@@ -3,6 +3,7 @@ import authRoutes from "./routes/auth.routes";
 import marketRoutes from "./routes/market.routes";
 import favoritesRoutes from "./routes/favorites.routes";
 import usersRoutes from "./routes/users.routes";
+import categoriesRoutes from "./routes/categories.routes";
 import { ensureUploadDirs, UPLOADS_ROOT } from "./upload";
 
 export function createApp(): Express {
@@ -20,6 +21,7 @@ export function createApp(): Express {
   app.use("/api/market/items", marketRoutes);
   app.use("/api/market/favorites", favoritesRoutes);
   app.use("/api/users", usersRoutes);
+  app.use("/api/categories", categoriesRoutes);
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     console.error(err);
