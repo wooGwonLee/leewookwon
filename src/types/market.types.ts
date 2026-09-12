@@ -1,11 +1,6 @@
-export interface MarketItem {
-  id: string;
-  name: string;
-  price: number;
-  description?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+import { MarketItem } from "@prisma/client";
+
+export type { MarketItem };
 
 export interface CreateMarketItemInput {
   name: string;
