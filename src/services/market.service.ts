@@ -5,6 +5,7 @@ import { prisma } from "../db/prisma";
 import {
   CreateMarketItemInput,
   MarketItemFilters,
+  MarketItemSort,
   MarketItemWithAggregates,
   PaginatedResult,
   UpdateMarketItemInput,
@@ -54,16 +55,32 @@ function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
   return where;
 }
 
+function buildOrderBy(sort: MarketItemSort): Prisma.MarketItemOrderByWithRelationInput[] {
+  const { sortBy, sortOrder } = sort;
+  const primary: Prisma.MarketItemOrderByWithRelationInput =
+    sortBy === "favoriteCount"
+      ? { favorites: { _count: sortOrder } }
+      : sortBy === "reviewCount"
+        ? { reviews: { _count: sortOrder } }
+        : { [sortBy]: sortOrder };
+  // A tiebreaker keeps pagination stable/deterministic when the sort field
+  // has duplicate values (e.g. many items with the same price).
+  return [primary, { id: "asc" }];
+}
+
+const DEFAULT_SORT: MarketItemSort = { sortBy: "createdAt", sortOrder: "asc" };
+
 export async function listItems(
   page: number,
   limit: number,
   filters: MarketItemFilters = {},
+  sort: MarketItemSort = DEFAULT_SORT,
 ): Promise<PaginatedResult<MarketItemWithAggregates>> {
   const where = buildWhere(filters);
   const [items, total] = await Promise.all([
     prisma.marketItem.findMany({
       where,
-      orderBy: { createdAt: "asc" },
+      orderBy: buildOrderBy(sort),
       skip: (page - 1) * limit,
       take: limit,
       include: ITEM_COUNTS_INCLUDE,

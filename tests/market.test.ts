@@ -263,4 +263,82 @@ describe("Market items API", () => {
       expect(inverted.status).toBe(400);
     });
   });
+
+  describe("sorting", () => {
+    let userToken: string;
+
+    beforeEach(async () => {
+      userToken = await registerAndLogin("sorter@example.com", "USER");
+      const seed = [
+        { name: "Charlie Widget", price: 30 },
+        { name: "Alpha Widget", price: 10 },
+        { name: "Bravo Widget", price: 20 },
+      ];
+      for (const item of seed) {
+        await request(app)
+          .post("/api/market/items")
+          .set("Authorization", `Bearer ${userToken}`)
+          .send(item);
+      }
+    });
+
+    it("defaults to createdAt ascending (creation order)", async () => {
+      const res = await request(app).get("/api/market/items");
+      expect(res.body.items.map((i: { name: string }) => i.name)).toEqual([
+        "Charlie Widget",
+        "Alpha Widget",
+        "Bravo Widget",
+      ]);
+    });
+
+    it("sorts by price ascending and descending", async () => {
+      const asc = await request(app).get("/api/market/items?sortBy=price&sortOrder=asc");
+      expect(asc.body.items.map((i: { price: number }) => i.price)).toEqual([10, 20, 30]);
+
+      const desc = await request(app).get("/api/market/items?sortBy=price&sortOrder=desc");
+      expect(desc.body.items.map((i: { price: number }) => i.price)).toEqual([30, 20, 10]);
+    });
+
+    it("sorts by name", async () => {
+      const res = await request(app).get("/api/market/items?sortBy=name&sortOrder=asc");
+      expect(res.body.items.map((i: { name: string }) => i.name)).toEqual([
+        "Alpha Widget",
+        "Bravo Widget",
+        "Charlie Widget",
+      ]);
+    });
+
+    it("sorts by viewCount descending after viewing items different amounts", async () => {
+      const listRes = await request(app).get("/api/market/items?sortBy=name&sortOrder=asc");
+      const [alpha, bravo] = listRes.body.items;
+
+      await request(app).get(`/api/market/items/${bravo.id}`);
+      await request(app).get(`/api/market/items/${bravo.id}`);
+      await request(app).get(`/api/market/items/${alpha.id}`);
+
+      const res = await request(app).get("/api/market/items?sortBy=viewCount&sortOrder=desc");
+      expect(res.body.items[0].name).toBe("Bravo Widget");
+    });
+
+    it("sorts by favoriteCount descending", async () => {
+      const listRes = await request(app).get("/api/market/items?sortBy=name&sortOrder=asc");
+      const [alpha] = listRes.body.items;
+
+      await request(app)
+        .post(`/api/market/items/${alpha.id}/favorite`)
+        .set("Authorization", `Bearer ${userToken}`);
+
+      const res = await request(app).get("/api/market/items?sortBy=favoriteCount&sortOrder=desc");
+      expect(res.body.items[0].name).toBe("Alpha Widget");
+      expect(res.body.items[0].favoriteCount).toBe(1);
+    });
+
+    it("rejects an invalid sortBy or sortOrder", async () => {
+      const badField = await request(app).get("/api/market/items?sortBy=nope");
+      expect(badField.status).toBe(400);
+
+      const badOrder = await request(app).get("/api/market/items?sortBy=price&sortOrder=up");
+      expect(badOrder.status).toBe(400);
+    });
+  });
 });
