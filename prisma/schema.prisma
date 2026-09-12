@@ -23,8 +23,25 @@ model MarketItem {
   images     MarketItemImage[]
   category   Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   orderItems OrderItem[]
+  options    MarketItemOption[]
 
   @@map("market_items")
+}
+
+model MarketItemOption {
+  id           String   @id @default(uuid())
+  marketItemId String
+  name         String
+  priceDelta   Float    @default(0)
+  stock        Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  marketItem MarketItem  @relation(fields: [marketItemId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+
+  @@unique([marketItemId, name])
+  @@map("market_item_options")
 }
 
 model Category {
@@ -121,14 +138,16 @@ model Order {
 }
 
 model OrderItem {
-  id           String @id @default(uuid())
-  orderId      String
-  marketItemId String
-  quantity     Int
-  priceAtOrder Float
+  id                 String  @id @default(uuid())
+  orderId            String
+  marketItemId       String
+  marketItemOptionId String?
+  quantity           Int
+  priceAtOrder       Float
 
-  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  marketItem MarketItem @relation(fields: [marketItemId], references: [id], onDelete: Restrict)
+  order            Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  marketItem       MarketItem        @relation(fields: [marketItemId], references: [id], onDelete: Restrict)
+  marketItemOption MarketItemOption? @relation(fields: [marketItemOptionId], references: [id], onDelete: Restrict)
 
   @@map("order_items")
 }

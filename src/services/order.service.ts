@@ -14,7 +14,12 @@ export class ForbiddenOrderActionError extends Error {}
 export class InvalidOrderTransitionError extends Error {}
 
 const ORDER_INCLUDE = {
-  items: { include: { marketItem: { select: { id: true, name: true } } } },
+  items: {
+    include: {
+      marketItem: { select: { id: true, name: true } },
+      marketItemOption: { select: { id: true, name: true } },
+    },
+  },
 } satisfies Prisma.OrderInclude;
 
 // Only these transitions are allowed; PENDING/CONFIRMED can move forward or be
@@ -32,25 +37,49 @@ export async function createOrder(
   items: CreateOrderItemInput[],
 ): Promise<OrderWithItems> {
   return prisma.$transaction(async (tx) => {
-    const orderItemsData: { marketItemId: string; quantity: number; priceAtOrder: number }[] = [];
+    const orderItemsData: {
+      marketItemId: string;
+      marketItemOptionId?: string;
+      quantity: number;
+      priceAtOrder: number;
+    }[] = [];
     let totalPrice = 0;
-    for (const { marketItemId, quantity } of items) {
+    for (const { marketItemId, marketItemOptionId, quantity } of items) {
       const item = await tx.marketItem.findUnique({ where: { id: marketItemId } });
       if (!item) {
         throw new OrderItemNotFoundError(`Item ${marketItemId} not found`);
       }
       // Same conditional-updateMany pattern as marketService.adjustStock: the
       // WHERE clause itself gates the decrement on stock staying non-negative,
-      // so concurrent orders for the same item can't race each other negative.
-      const result = await tx.marketItem.updateMany({
-        where: { id: marketItemId, stock: { gte: quantity } },
-        data: { stock: { decrement: quantity } },
-      });
-      if (result.count === 0) {
-        throw new InsufficientStockError(`Insufficient stock for item ${marketItemId}`);
+      // so concurrent orders for the same item/option can't race each other negative.
+      if (marketItemOptionId) {
+        const option = await tx.marketItemOption.findUnique({ where: { id: marketItemOptionId } });
+        if (!option || option.marketItemId !== marketItemId) {
+          throw new OrderItemNotFoundError(
+            `Option ${marketItemOptionId} not found for item ${marketItemId}`,
+          );
+        }
+        const result = await tx.marketItemOption.updateMany({
+          where: { id: marketItemOptionId, stock: { gte: quantity } },
+          data: { stock: { decrement: quantity } },
+        });
+        if (result.count === 0) {
+          throw new InsufficientStockError(`Insufficient stock for option ${marketItemOptionId}`);
+        }
+        const priceAtOrder = item.price + option.priceDelta;
+        orderItemsData.push({ marketItemId, marketItemOptionId, quantity, priceAtOrder });
+        totalPrice += priceAtOrder * quantity;
+      } else {
+        const result = await tx.marketItem.updateMany({
+          where: { id: marketItemId, stock: { gte: quantity } },
+          data: { stock: { decrement: quantity } },
+        });
+        if (result.count === 0) {
+          throw new InsufficientStockError(`Insufficient stock for item ${marketItemId}`);
+        }
+        orderItemsData.push({ marketItemId, quantity, priceAtOrder: item.price });
+        totalPrice += item.price * quantity;
       }
-      orderItemsData.push({ marketItemId, quantity, priceAtOrder: item.price });
-      totalPrice += item.price * quantity;
     }
     return tx.order.create({
       data: { userId, totalPrice, items: { create: orderItemsData } },
@@ -89,10 +118,15 @@ async function restoreStockForOrder(tx: Prisma.TransactionClient, orderId: strin
   const items = await tx.orderItem.findMany({ where: { orderId } });
   await Promise.all(
     items.map((item) =>
-      tx.marketItem.update({
-        where: { id: item.marketItemId },
-        data: { stock: { increment: item.quantity } },
-      }),
+      item.marketItemOptionId
+        ? tx.marketItemOption.update({
+            where: { id: item.marketItemOptionId },
+            data: { stock: { increment: item.quantity } },
+          })
+        : tx.marketItem.update({
+            where: { id: item.marketItemId },
+            data: { stock: { increment: item.quantity } },
+          }),
     ),
   );
 }
