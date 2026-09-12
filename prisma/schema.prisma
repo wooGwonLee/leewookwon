@@ -13,6 +13,7 @@ model MarketItem {
   price       Float
   description String?
   viewCount   Int      @default(0)
+  stock       Int      @default(0)
   categoryId  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

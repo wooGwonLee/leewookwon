@@ -7,6 +7,7 @@ export interface CreateMarketItemInput {
   price: number;
   description?: string;
   categoryId?: string;
+  stock?: number;
 }
 
 export interface UpdateMarketItemInput {
@@ -14,6 +15,7 @@ export interface UpdateMarketItemInput {
   price?: number;
   description?: string;
   categoryId?: string | null;
+  stock?: number;
 }
 
 export interface PaginationMeta {
@@ -33,6 +35,7 @@ export interface MarketItemFilters {
   minPrice?: number;
   maxPrice?: number;
   categoryId?: string;
+  inStock?: boolean;
 }
 
 export const SORTABLE_FIELDS = [
@@ -42,6 +45,7 @@ export const SORTABLE_FIELDS = [
   "name",
   "favoriteCount",
   "reviewCount",
+  "stock",
 ] as const;
 
 export type SortableField = (typeof SORTABLE_FIELDS)[number];
