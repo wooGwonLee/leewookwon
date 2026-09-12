@@ -9,22 +9,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run in dev mode (auto-restart): `npm run dev`
 - Start built server: `npm start`
 - Lint: `npm run lint`
-- Run all tests: `npm test` (requires `DATABASE_URL` pointing at a reachable Postgres with
-  migrations applied — see Database below)
-- Run a single test file: `npx jest tests/market.test.ts`
-- Run a single test by name: `npx jest -t "creates, fetches, updates, and deletes an item"`
+- Run all tests: `npm test` (requires `DATABASE_URL` and `JWT_SECRET` env vars, and a reachable
+  Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
+  share one real database and would otherwise race each other)
+- Run a single test file: `npx jest tests/market.test.ts` (append `--runInBand` if running
+  alongside other suites against the same database)
+- Run a single test by name: `npx jest -t "creates, fetches, updates as a regular user, and deletes as an admin"`
 - Create/apply a new migration during development: `npm run prisma:migrate`
 - Apply existing migrations without prompting (CI/prod): `npm run prisma:migrate:deploy`
 
 ## Database
 
 Backed by PostgreSQL via Prisma. Copy `.env.example` to `.env` and point `DATABASE_URL` at a
-running Postgres instance, then run `npm run prisma:migrate` to create the schema (a
-`market_items` table backing the `MarketItem` model in `prisma/schema.prisma`). Tests use the
-same `DATABASE_URL` and wipe the `MarketItem` table between test cases (`beforeEach` in
-`tests/market.test.ts`) — point it at a disposable/test database, not one with real data. CI
-spins up a `postgres:16` service container and runs `prisma migrate deploy` before testing (see
+running Postgres instance, set `JWT_SECRET` to any long random string, then run
+`npm run prisma:migrate` to create the schema (`market_items` and `users` tables, backing the
+`MarketItem` and `User` models in `prisma/schema.prisma`). Tests use the same `DATABASE_URL` and
+wipe the `MarketItem`/`User` tables between test cases (`beforeEach` in `tests/market.test.ts` and
+`tests/auth.test.ts`) — point it at a disposable/test database, not one with real data. CI spins
+up a `postgres:16` service container and runs `prisma migrate deploy` before testing (see
 `.github/workflows/ci.yml`).
+
+## Authentication & authorization
+
+JWT bearer tokens, issued via `POST /api/auth/login` after `POST /api/auth/register`
+(`src/services/auth.service.ts`, `src/controllers/auth.controller.ts`). Passwords are hashed with
+bcrypt (`bcryptjs`); tokens are signed with `JWT_SECRET` (`src/config.ts`) and carry
+`{ sub, email, role }`.
+
+- `src/middleware/auth.middleware.ts` — `authenticate` verifies the `Authorization: Bearer <token>`
+  header and populates `req.user`; `authorize(...roles)` gates a route to specific `Role`s
+  (`USER` | `ADMIN`) and must run after `authenticate`.
+- Every new user registers as `USER`; there is no API path to self-promote to `ADMIN` — grant it
+  directly in the database (or via a future admin-only endpoint) when needed.
+- Market item routes: listing/reading (`GET`) are public; creating/updating (`POST`/`PATCH`)
+  require `authenticate`; deleting (`DELETE`) additionally requires `authorize("ADMIN")`. Follow
+  this same `authenticate [, authorize(...)]` pattern when adding new protected routes.
 
 ## Architecture
 
@@ -38,19 +57,23 @@ route -> controller -> service pattern:
   disconnects Prisma on `SIGINT`/`SIGTERM`.
 - `src/db/prisma.ts` — the shared `PrismaClient` instance; import this rather than instantiating
   a new client elsewhere.
-- `src/routes/market.routes.ts` — maps HTTP verbs/paths under `/api/market/items` to controller
+- `src/config.ts` — reads/validates process env (e.g. `JWT_SECRET`, `JWT_EXPIRES_IN`); read env
+  vars through here rather than `process.env` directly.
+- `src/routes/market.routes.ts`, `src/routes/auth.routes.ts` — map HTTP verbs/paths to controller
   functions, wrapped in `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected promises reach
   the error-handling middleware instead of crashing silently.
-- `src/controllers/market.controller.ts` — parses/validates request data, calls the service layer,
-  shapes HTTP responses/status codes.
-- `src/services/market.service.ts` — business logic and data access, backed by Prisma
-  (`prisma.marketItem`). This is the layer to touch if the persistence approach changes; the
-  controller/route layers don't need to know it's Postgres.
-- `src/types/market.types.ts` — shared TypeScript types for the market domain: re-exports the
-  Prisma-generated `MarketItem` type and defines create/update input shapes.
-- `prisma/schema.prisma` — the `MarketItem` model and datasource config; `prisma/migrations/`
-  holds the generated SQL migrations (commit these alongside schema changes).
+- `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
+  above).
+- `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts` — parse/validate
+  request data, call the service layer, shape HTTP responses/status codes.
+- `src/services/market.service.ts`, `src/services/auth.service.ts` — business logic and data
+  access, backed by Prisma (`prisma.marketItem`, `prisma.user`). This is the layer to touch if the
+  persistence approach changes; the controller/route layers don't need to know it's Postgres.
+- `src/types/market.types.ts`, `src/types/auth.types.ts` — shared TypeScript types, re-exporting
+  Prisma-generated types (`MarketItem`, `Role`) alongside request input shapes.
+- `prisma/schema.prisma` — the `MarketItem`/`User`/`Role` models and datasource config;
+  `prisma/migrations/` holds the generated SQL migrations (commit these alongside schema changes).
 
-Tests (`tests/market.test.ts`) use `supertest` against the app built by `createApp()` and hit the
-real database configured by `DATABASE_URL` — they don't start a real network listener, but they
-are integration tests, not pure unit tests.
+Tests (`tests/market.test.ts`, `tests/auth.test.ts`) use `supertest` against the app built by
+`createApp()` and hit the real database configured by `DATABASE_URL` — they don't start a real
+network listener, but they are integration tests, not pure unit tests.

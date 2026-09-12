@@ -1,4 +1,5 @@
 import express, { Express, NextFunction, Request, Response } from "express";
+import authRoutes from "./routes/auth.routes";
 import marketRoutes from "./routes/market.routes";
 
 export function createApp(): Express {
@@ -9,6 +10,7 @@ export function createApp(): Express {
     res.json({ status: "ok" });
   });
 
+  app.use("/api/auth", authRoutes);
   app.use("/api/market/items", marketRoutes);
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
