@@ -13,9 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
   (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`,
   `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`, `tests/stock.test.ts`,
-  `tests/orders.test.ts`, `tests/options.test.ts`, `tests/adminStats.test.ts`) share one real
-  database — and, for images, the same `uploads/` directory on disk — and would otherwise race
-  each other; every test file whose
+  `tests/orders.test.ts`, `tests/options.test.ts`, `tests/adminStats.test.ts`,
+  `tests/addresses.test.ts`) share one real database — and, for images, the same `uploads/`
+  directory on disk — and would otherwise race each other; every test file whose
   `beforeEach` wipes `marketItem` must also wipe `order` first, since `OrderItem.marketItem` is
   `onDelete: Restrict` — see Orders below. `MarketItemOption` doesn't need its own explicit
   cleanup — it cascade-deletes with its parent `marketItem`)
@@ -225,22 +225,29 @@ is `onDelete: Restrict` (deliberately — an item that has ever been ordered can
 order history never dangles; see the `marketService.deleteItem` note below).
 
 - `POST /api/orders` — auth required; body `{ items: [{ marketItemId, marketItemOptionId?,
-  quantity: positive integer }, ...] }` (non-empty, no duplicate `marketItemId`+`marketItemOptionId`
-  pair within one request — merge quantities client-side instead; ordering the same item with two
-  *different* options in one request is fine). 400 on a malformed body. 404 if any referenced item
+  quantity: positive integer }, ...], addressId? }` (`items` non-empty, no duplicate
+  `marketItemId`+`marketItemOptionId` pair within one request — merge quantities client-side
+  instead; ordering the same item with two *different* options in one request is fine). 400 on a
+  malformed body (including a present-but-non-string/empty `addressId`). 404 if any referenced item
   or option doesn't exist (or the option doesn't belong to the given `marketItemId` — see Product
-  options below). 409 (`InsufficientStockError`, reused from `marketService`) if any line item's
-  `quantity` exceeds the current stock — the item's `stock` if no `marketItemOptionId` is given,
-  the option's own `stock` otherwise (see Product options below). 201 with the created order
-  (`status: "PENDING"`) on success. `orderService.createOrder` runs the whole thing in one
-  `prisma.$transaction`: for each line item it decrements stock (item- or option-level) via the
-  same conditional-`updateMany` pattern as `marketService.adjustStock` (`WHERE stock >= quantity`,
-  race-safe under concurrent orders for the same item/option), and accumulates `totalPrice` from
-  each item's live price (plus the option's `priceDelta`, if any) at the moment of purchase. If any
-  single line item fails (missing item/option or insufficient stock), the whole transaction rolls
-  back — no order is created and no stock already decremented for earlier items in the same
-  request is left decremented. Follow this same "loop-and-accumulate inside one `$transaction`"
-  shape for any future multi-row, all-or-nothing write.
+  options below), or if `addressId` doesn't refer to an address owned by the requesting user (see
+  Shipping addresses below — a real address owned by someone else 404s exactly like a
+  nonexistent one, not 403, since it's equally unusable to this order). 409
+  (`InsufficientStockError`, reused from `marketService`) if any line item's `quantity` exceeds the
+  current stock — the item's `stock` if no `marketItemOptionId` is given, the option's own `stock`
+  otherwise (see Product options below). 201 with the created order (`status: "PENDING"`) on
+  success. `orderService.createOrder` runs the whole thing in one `prisma.$transaction`: for each
+  line item it decrements stock (item- or option-level) via the same conditional-`updateMany`
+  pattern as `marketService.adjustStock` (`WHERE stock >= quantity`, race-safe under concurrent
+  orders for the same item/option), and accumulates `totalPrice` from each item's live price (plus
+  the option's `priceDelta`, if any) at the moment of purchase. If `addressId` is given, the
+  matching address's fields are copied into `Order.shippingSnapshot` (a `Json` column) at creation
+  time — see Shipping addresses below for why this is snapshotted rather than just referenced. If
+  any single line item fails (missing item/option, insufficient stock) or the address doesn't
+  resolve, the whole transaction rolls back — no order is created and no stock already decremented
+  for earlier items in the same request is left decremented. Follow this same
+  "loop-and-accumulate inside one `$transaction`" shape for any future multi-row, all-or-nothing
+  write.
 - `GET /api/orders` — auth required, paginated (same `{ items, pagination }` shape). A regular
   user sees only their own orders; an `ADMIN` sees every order (role-based scoping happens in
   `order.controller.ts`'s `list`, not a separate endpoint — there's no "my orders" vs "all orders"
@@ -303,6 +310,48 @@ convention like `"L / Red"` client-side. `MarketItemOption.marketItemId` is `onD
   stock restore on cancel). Omitting `marketItemOptionId` orders the base item exactly as before
   options existed — this feature is purely additive, not a breaking change to the order flow for
   items without variants.
+
+## Shipping addresses
+
+An `Address` (`userId`, `label?`, `recipientName`, `phone`, `postalCode`, `address1`, `address2?`,
+`isDefault`) lets a user save multiple shipping addresses and pick one at order time
+(`src/services/address.service.ts`, `src/controllers/address.controller.ts`, mounted at
+`/api/addresses`). `Address.userId` is `onDelete: Cascade` (deleting a user drops their saved
+addresses); addresses are strictly owner-only — unlike orders, there's no `ADMIN` override on read
+(`get`/`update`/`delete` all just 403 a non-owner, even an admin), since a saved address is PII the
+owner hasn't chosen to share, not something staff need to manage.
+
+- `POST /api/addresses` — auth required; body `{ label?, recipientName, phone, postalCode,
+  address1, address2?, isDefault? }`. `recipientName`/`phone`/`postalCode`/`address1` are required
+  non-empty strings; `label`/`address2` are optional strings; `isDefault` is an optional boolean
+  (default `false`). 400 on any violation. 201 on success.
+- `GET /api/addresses` — auth required, paginated (same `{ items, pagination }` shape); only the
+  current user's own addresses, ordered default-first then newest-first
+  (`orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }]`).
+- `GET /api/addresses/:id` / `PATCH /api/addresses/:id` / `DELETE /api/addresses/:id` — auth
+  required; 404 if the address doesn't exist, 403 if it exists but belongs to a different user.
+  `PATCH` accepts any subset of the create fields (`label`/`address2` may also be set to `null` to
+  clear them). 204 on delete.
+- At most one address per user has `isDefault: true`. Setting `isDefault: true` on create or
+  update runs in a `prisma.$transaction` that first clears the flag on any other address owned by
+  that user (`unsetOtherDefaults` in `address.service.ts`), then writes the new one — there's no
+  unique index enforcing this (a partial unique index on `(userId) WHERE isDefault` would need a
+  raw migration Prisma's schema syntax doesn't express directly), so the transaction *is* the
+  invariant; don't add a second default-setting code path that skips it. There's no auto-promoting
+  a replacement default when the current default is deleted — deleting it just leaves the user
+  with no default until they set one explicitly.
+- Selecting an address at order time: `POST /api/orders` takes an optional top-level `addressId`
+  (a sibling of `items`, not per-line-item). If given, `orderService.createOrder` copies the
+  address's fields into `Order.shippingSnapshot` (a `Json` column) and records `Order.
+  shippingAddressId` — but `shippingAddressId` is `onDelete: SetNull` (deliberately different from
+  the `Restrict` used for `OrderItem.marketItemId`/`marketItemOptionId`): an address is just saved
+  metadata, not inventory, so a user must be able to freely delete an old address even if it was
+  used on a past order, and the snapshot already preserves that order's shipping details regardless
+  of whether the address still exists — `marketService.deleteItem`'s P2003-catching pattern does
+  NOT apply here, `address.service.ts`'s `deleteAddress` never needs to catch a delete-blocked
+  error. Omitting `addressId` leaves both `shippingAddressId` and `shippingSnapshot` `null` — this
+  feature is purely additive, not a breaking change to the order flow for orders that don't need
+  shipping.
 
 ## Admin statistics
 
@@ -368,15 +417,16 @@ route -> controller -> service pattern:
   (`ensureUploadDirs`, `UPLOADS_ROOT`, `MARKET_ITEM_IMAGES_DIR`); see Product images below.
 - `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts`,
   `src/routes/users.routes.ts`, `src/routes/categories.routes.ts`, `src/routes/orders.routes.ts`,
-  `src/routes/admin.routes.ts` — map HTTP verbs/paths to controller functions, wrapped in
-  `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling
-  middleware instead of crashing silently. The item-scoped favorite/review/image/option routes
-  (`/:id/favorite`, `/:id/reviews`, `/:id/images`, `/:id/options`) live in `market.routes.ts`; the
-  "my favorites" list route lives in `favorites.routes.ts` (mounted at `/api/market/favorites`);
-  admin user management lives in `users.routes.ts` (mounted at `/api/users`); categories live in
-  `categories.routes.ts` (mounted at `/api/categories`); orders live in `orders.routes.ts`
-  (mounted at `/api/orders`); admin stats live in `admin.routes.ts` (mounted at `/api/admin`) —
-  all in `src/app.ts`.
+  `src/routes/admin.routes.ts`, `src/routes/addresses.routes.ts` — map HTTP verbs/paths to
+  controller functions, wrapped in `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected
+  promises reach the error-handling middleware instead of crashing silently. The item-scoped
+  favorite/review/image/option routes (`/:id/favorite`, `/:id/reviews`, `/:id/images`,
+  `/:id/options`) live in `market.routes.ts`; the "my favorites" list route lives in
+  `favorites.routes.ts` (mounted at `/api/market/favorites`); admin user management lives in
+  `users.routes.ts` (mounted at `/api/users`); categories live in `categories.routes.ts` (mounted
+  at `/api/categories`); orders live in `orders.routes.ts` (mounted at `/api/orders`); admin stats
+  live in `admin.routes.ts` (mounted at `/api/admin`); saved shipping addresses live in
+  `addresses.routes.ts` (mounted at `/api/addresses`) — all in `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
   above). `src/middleware/upload.middleware.ts` — `handleImageUpload` wraps the multer middleware
   so its errors become JSON 400s instead of uncaught exceptions.
@@ -387,33 +437,37 @@ route -> controller -> service pattern:
   `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts`,
   `src/controllers/user.controller.ts`, `src/controllers/image.controller.ts`,
   `src/controllers/category.controller.ts`, `src/controllers/order.controller.ts`,
-  `src/controllers/option.controller.ts`, `src/controllers/stats.controller.ts` — parse/validate
-  request data, call the service layer, shape HTTP responses/status codes.
+  `src/controllers/option.controller.ts`, `src/controllers/stats.controller.ts`,
+  `src/controllers/address.controller.ts` — parse/validate request data, call the service layer,
+  shape HTTP responses/status codes.
 - `src/services/market.service.ts`, `src/services/auth.service.ts`,
   `src/services/favorite.service.ts`, `src/services/review.service.ts`,
   `src/services/user.service.ts`, `src/services/image.service.ts`, `src/services/category.service.ts`,
   `src/services/order.service.ts`, `src/services/option.service.ts`, `src/services/stats.service.ts`,
-  `src/services/rating.util.ts` — business logic and data access, backed by Prisma
-  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`, `prisma.marketItemImage`,
-  `prisma.category`, `prisma.order`, `prisma.orderItem`, `prisma.marketItemOption`). This is the
-  layer to touch if the persistence approach changes; the controller/route layers don't need to
-  know it's Postgres (or, for images, local disk). `stats.service.ts` reads across several tables
-  but writes nothing of its own — no new Prisma model backs it.
+  `src/services/address.service.ts`, `src/services/rating.util.ts` — business logic and data
+  access, backed by Prisma (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`,
+  `prisma.marketItemImage`, `prisma.category`, `prisma.order`, `prisma.orderItem`,
+  `prisma.marketItemOption`, `prisma.address`). This is the layer to touch if the persistence
+  approach changes; the controller/route layers don't need to know it's Postgres (or, for images,
+  local disk). `stats.service.ts` reads across several tables but writes nothing of its own — no
+  new Prisma model backs it.
 - `src/types/market.types.ts`, `src/types/auth.types.ts`, `src/types/review.types.ts`,
   `src/types/category.types.ts`, `src/types/order.types.ts`, `src/types/option.types.ts`,
-  `src/types/stats.types.ts` — shared TypeScript types, re-exporting Prisma-generated types
-  (`MarketItem`, `MarketItemImage`, `Role`, `Review`, `Category`, `Order`, `OrderItem`,
-  `OrderStatus`, `MarketItemOption`) alongside request input shapes; `stats.types.ts` is
-  response-shape types only (`StatsSummary`, `TopSellingItem`), since admin stats have no request
-  input beyond query params.
+  `src/types/stats.types.ts`, `src/types/address.types.ts` — shared TypeScript types, re-exporting
+  Prisma-generated types (`MarketItem`, `MarketItemImage`, `Role`, `Review`, `Category`, `Order`,
+  `OrderItem`, `OrderStatus`, `MarketItemOption`, `Address`) alongside request input shapes;
+  `stats.types.ts` is response-shape types only (`StatsSummary`, `TopSellingItem`), since admin
+  stats have no request input beyond query params. `address.types.ts` also defines
+  `ShippingSnapshot`, the shape stored in `Order.shippingSnapshot` — shared between
+  `address.service.ts` (source fields) and `order.service.ts` (where it's built and persisted).
 - `prisma/schema.prisma` — the
-  `MarketItem`/`User`/`Role`/`Favorite`/`Review`/`MarketItemImage`/`Category`/`Order`/`OrderItem`/`OrderStatus`/`MarketItemOption`
+  `MarketItem`/`User`/`Role`/`Favorite`/`Review`/`MarketItemImage`/`Category`/`Order`/`OrderItem`/`OrderStatus`/`MarketItemOption`/`Address`
   models and datasource config; `prisma/migrations/` holds the generated SQL migrations (commit
   these alongside schema changes).
 
 Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
 `tests/reviews.test.ts`, `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`,
 `tests/stock.test.ts`, `tests/orders.test.ts`, `tests/options.test.ts`,
-`tests/adminStats.test.ts`) use `supertest` against the app built by `createApp()` and hit the real
-database configured by `DATABASE_URL` — they don't start a real network listener, but they are
-integration tests, not pure unit tests.
+`tests/adminStats.test.ts`, `tests/addresses.test.ts`) use `supertest` against the app built by
+`createApp()` and hit the real database configured by `DATABASE_URL` — they don't start a real
+network listener, but they are integration tests, not pure unit tests.
