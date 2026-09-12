@@ -57,6 +57,16 @@ array — a non-integer or non-positive `page`/`limit` returns 400. It also take
 `PaginatedResult<T>` (`src/types/market.types.ts`) — follow the same pattern for other list
 endpoints added later.
 
+## View count
+
+`MarketItem.viewCount` (default 0) increments by 1 every time `GET /api/market/items/:id` is
+called; listing (`GET /api/market/items`) never touches it. `marketService.getItem` does this via
+a raw `$executeRaw` update (`src/services/market.service.ts`) rather than
+`prisma.marketItem.update`, specifically so it does NOT bump `updatedAt` — that column tracks
+content edits (`update`/`create`), not views. If you add another "increment a counter on read"
+field, follow the same raw-update approach rather than `update()`, or it will silently start
+touching `updatedAt`.
+
 ## Architecture
 
 Node.js/TypeScript/Express backend API for the "market" feature. Layout follows a standard
