@@ -19,6 +19,7 @@ async function registerAndLogin(
 }
 
 beforeEach(async () => {
+  await prisma.order.deleteMany();
   await prisma.marketItem.deleteMany();
   await prisma.category.deleteMany();
   await prisma.user.deleteMany();

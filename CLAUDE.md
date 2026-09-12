@@ -12,9 +12,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run all tests: `npm test` (requires `DATABASE_URL` and `JWT_SECRET` env vars, and a reachable
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
   (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`,
-  `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`, `tests/stock.test.ts`)
-  share one real database — and, for images, the same `uploads/` directory on disk — and would
-  otherwise race each other)
+  `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`, `tests/stock.test.ts`,
+  `tests/orders.test.ts`) share one real database — and, for images, the same `uploads/` directory
+  on disk — and would otherwise race each other; every test file whose `beforeEach` wipes
+  `marketItem` must also wipe `order` first, since `OrderItem.marketItem` is `onDelete: Restrict`
+  — see Orders below)
 - Run a single test file: `npx jest tests/market.test.ts` (append `--runInBand` if running
   alongside other suites against the same database)
 - Run a single test by name: `npx jest -t "creates, fetches, updates as a regular user, and deletes as an admin"`
@@ -206,6 +208,54 @@ available (`src/services/market.service.ts`, `src/controllers/market.controller.
 - Follow this same conditional-`updateMany` pattern for any future "adjust a counter but never let
   it go negative/over a cap" field, rather than a naive read-modify-write.
 
+## Orders
+
+An `Order` (`userId`, `status`, `totalPrice`) with one or more `OrderItem` rows (`marketItemId`,
+`quantity`, `priceAtOrder` — a snapshot of the item's price at order time, since the item's live
+price can change later) backs a minimal cart-checkout flow with no payment integration
+(`src/services/order.service.ts`, `src/controllers/order.controller.ts`, mounted at `/api/orders`).
+`Order.userId` is `onDelete: Cascade` (deleting a user drops their orders); `OrderItem.marketItemId`
+is `onDelete: Restrict` (deliberately — an item that has ever been ordered can't be deleted, so
+order history never dangles; see the `marketService.deleteItem` note below).
+
+- `POST /api/orders` — auth required; body `{ items: [{ marketItemId, quantity: positive integer
+  }, ...] }` (non-empty, no duplicate `marketItemId` within one request — merge quantities
+  client-side instead). 400 on a malformed body. 404 if any referenced item doesn't exist. 409
+  (`InsufficientStockError`, reused from `marketService`) if any item's `quantity` exceeds its
+  current stock. 201 with the created order (`status: "PENDING"`) on success.
+  `orderService.createOrder` runs the whole thing in one `prisma.$transaction`: for each line item
+  it decrements stock via the same conditional-`updateMany` pattern as
+  `marketService.adjustStock` (`WHERE stock >= quantity`, race-safe under concurrent orders for the
+  same item), and accumulates `totalPrice` from each item's live price at the moment of purchase.
+  If any single line item fails (missing item or insufficient stock), the whole transaction rolls
+  back — no order is created and no stock already decremented for earlier items in the same
+  request is left decremented. Follow this same "loop-and-accumulate inside one `$transaction`"
+  shape for any future multi-row, all-or-nothing write.
+- `GET /api/orders` — auth required, paginated (same `{ items, pagination }` shape). A regular
+  user sees only their own orders; an `ADMIN` sees every order (role-based scoping happens in
+  `order.controller.ts`'s `list`, not a separate endpoint — there's no "my orders" vs "all orders"
+  route split).
+- `GET /api/orders/:id` — auth required; the order's owner or an `ADMIN` can view it, 403
+  otherwise, 404 if it doesn't exist.
+- `PATCH /api/orders/:id/cancel` — auth required; the order's owner or an `ADMIN` can cancel it,
+  403 otherwise, 404 if missing, 409 unless the order is still `PENDING` (self-serve cancellation
+  is only for orders nobody has acted on yet — once `CONFIRMED`, only the admin status endpoint
+  below can move it). Restores the stock that was reserved at order creation.
+- `PATCH /api/orders/:id/status` — admin-only (`authorize("ADMIN")`); body `{ status }`, one of
+  `PENDING`/`CONFIRMED`/`COMPLETED`/`CANCELLED`. 400 if `status` isn't one of those. 404 if the
+  order doesn't exist. 409 if the transition isn't allowed — `ALLOWED_TRANSITIONS` in
+  `order.service.ts` only permits `PENDING → CONFIRMED | CANCELLED` and
+  `CONFIRMED → COMPLETED | CANCELLED`; `COMPLETED` and `CANCELLED` are terminal (no further
+  transitions). Transitioning to `CANCELLED` from either allowed state restores stock, same as the
+  cancel endpoint above (both funnel through the same `restoreStockForOrder` helper).
+- Every order response includes `items`, each with a nested `marketItem: { id, name }` (via
+  `ORDER_INCLUDE` in `order.service.ts`, one query, no N+1) so a client doesn't have to re-fetch
+  item names separately.
+- Because `OrderItem.marketItemId` is `onDelete: Restrict`, `marketService.deleteItem` now also
+  catches Prisma's `P2003` (in addition to the existing `P2025`-for-not-found handling) and throws
+  `ItemHasOrdersError` → 409 `"Cannot delete an item that has existing orders"` in
+  `market.controller.ts`'s `remove` — deleting an item that was never ordered is unaffected.
+
 ## Aggregates on market item responses
 
 Every market item response (list, detail, create, update, and the favorites list) includes
@@ -237,14 +287,15 @@ route -> controller -> service pattern:
 - `src/upload.ts` — multer config (`uploadMarketItemImages`) and upload-directory constants/setup
   (`ensureUploadDirs`, `UPLOADS_ROOT`, `MARKET_ITEM_IMAGES_DIR`); see Product images below.
 - `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts`,
-  `src/routes/users.routes.ts`, `src/routes/categories.routes.ts` — map HTTP verbs/paths to
-  controller functions, wrapped in `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected
-  promises reach the error-handling middleware instead of crashing silently. The item-scoped
-  favorite/review/image routes (`/:id/favorite`, `/:id/reviews`, `/:id/images`) live in
-  `market.routes.ts`; the "my favorites" list route lives in `favorites.routes.ts` (mounted at
-  `/api/market/favorites`); admin user management lives in `users.routes.ts` (mounted at
-  `/api/users`); categories live in `categories.routes.ts` (mounted at `/api/categories`) — all
-  in `src/app.ts`.
+  `src/routes/users.routes.ts`, `src/routes/categories.routes.ts`, `src/routes/orders.routes.ts` —
+  map HTTP verbs/paths to controller functions, wrapped in `asyncHandler`
+  (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling middleware instead of
+  crashing silently. The item-scoped favorite/review/image routes (`/:id/favorite`, `/:id/reviews`,
+  `/:id/images`) live in `market.routes.ts`; the "my favorites" list route lives in
+  `favorites.routes.ts` (mounted at `/api/market/favorites`); admin user management lives in
+  `users.routes.ts` (mounted at `/api/users`); categories live in `categories.routes.ts` (mounted
+  at `/api/categories`); orders live in `orders.routes.ts` (mounted at `/api/orders`) — all in
+  `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
   above). `src/middleware/upload.middleware.ts` — `handleImageUpload` wraps the multer middleware
   so its errors become JSON 400s instead of uncaught exceptions.
@@ -254,25 +305,27 @@ route -> controller -> service pattern:
 - `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts`,
   `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts`,
   `src/controllers/user.controller.ts`, `src/controllers/image.controller.ts`,
-  `src/controllers/category.controller.ts` — parse/validate request data, call the service layer,
-  shape HTTP responses/status codes.
+  `src/controllers/category.controller.ts`, `src/controllers/order.controller.ts` — parse/validate
+  request data, call the service layer, shape HTTP responses/status codes.
 - `src/services/market.service.ts`, `src/services/auth.service.ts`,
   `src/services/favorite.service.ts`, `src/services/review.service.ts`,
   `src/services/user.service.ts`, `src/services/image.service.ts`, `src/services/category.service.ts`,
-  `src/services/rating.util.ts` — business logic and data access, backed by Prisma
-  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`, `prisma.marketItemImage`,
-  `prisma.category`). This is the layer to touch if the persistence approach changes; the
-  controller/route layers don't need to know it's Postgres (or, for images, local disk).
+  `src/services/order.service.ts`, `src/services/rating.util.ts` — business logic and data access,
+  backed by Prisma (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`,
+  `prisma.marketItemImage`, `prisma.category`, `prisma.order`, `prisma.orderItem`). This is the
+  layer to touch if the persistence approach changes; the controller/route layers don't need to
+  know it's Postgres (or, for images, local disk).
 - `src/types/market.types.ts`, `src/types/auth.types.ts`, `src/types/review.types.ts`,
-  `src/types/category.types.ts` — shared TypeScript types, re-exporting Prisma-generated types
-  (`MarketItem`, `MarketItemImage`, `Role`, `Review`, `Category`) alongside request input shapes.
+  `src/types/category.types.ts`, `src/types/order.types.ts` — shared TypeScript types,
+  re-exporting Prisma-generated types (`MarketItem`, `MarketItemImage`, `Role`, `Review`,
+  `Category`, `Order`, `OrderItem`, `OrderStatus`) alongside request input shapes.
 - `prisma/schema.prisma` — the
-  `MarketItem`/`User`/`Role`/`Favorite`/`Review`/`MarketItemImage`/`Category` models and
-  datasource config; `prisma/migrations/` holds the generated SQL migrations (commit these
-  alongside schema changes).
+  `MarketItem`/`User`/`Role`/`Favorite`/`Review`/`MarketItemImage`/`Category`/`Order`/`OrderItem`/`OrderStatus`
+  models and datasource config; `prisma/migrations/` holds the generated SQL migrations (commit
+  these alongside schema changes).
 
 Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
 `tests/reviews.test.ts`, `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`,
-`tests/stock.test.ts`) use `supertest` against the app built by `createApp()` and hit the real
-database configured by `DATABASE_URL` — they don't start a real network listener, but they are
-integration tests, not pure unit tests.
+`tests/stock.test.ts`, `tests/orders.test.ts`) use `supertest` against the app built by
+`createApp()` and hit the real database configured by `DATABASE_URL` — they don't start a real
+network listener, but they are integration tests, not pure unit tests.
