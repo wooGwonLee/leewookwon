@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Lint: `npm run lint`
 - Run all tests: `npm test` (requires `DATABASE_URL` and `JWT_SECRET` env vars, and a reachable
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
-  (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`)
-  share one real database and would otherwise race each other)
+  (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`,
+  `tests/users.test.ts`) share one real database and would otherwise race each other)
 - Run a single test file: `npx jest tests/market.test.ts` (append `--runInBand` if running
   alongside other suites against the same database)
 - Run a single test by name: `npx jest -t "creates, fetches, updates as a regular user, and deletes as an admin"`
@@ -40,8 +40,14 @@ bcrypt (`bcryptjs`); tokens are signed with `JWT_SECRET` (`src/config.ts`) and c
 - `src/middleware/auth.middleware.ts` — `authenticate` verifies the `Authorization: Bearer <token>`
   header and populates `req.user`; `authorize(...roles)` gates a route to specific `Role`s
   (`USER` | `ADMIN`) and must run after `authenticate`.
-- Every new user registers as `USER`; there is no API path to self-promote to `ADMIN` — grant it
-  directly in the database (or via a future admin-only endpoint) when needed.
+- Every new user registers as `USER`. Promoting/demoting a user is admin-only —
+  `PATCH /api/users/:id/role` (`src/controllers/user.controller.ts`,
+  `src/services/user.service.ts`), body `{ role: "USER" | "ADMIN" }`. 400 on an invalid role value,
+  404 if the target user doesn't exist, and — deliberately — 403 if `:id` is the requesting
+  admin's own id: an admin cannot change their own role through this endpoint (avoids
+  accidentally locking themselves out; use another admin account or edit the database directly).
+  `GET /api/users` (admin-only, paginated) lists users to find an id to promote; both endpoints
+  strip `passwordHash` from every returned user (`SafeUser` in `src/services/user.service.ts`).
 - Market item routes: listing/reading (`GET`) are public; creating/updating (`POST`/`PATCH`)
   require `authenticate`; deleting (`DELETE`) additionally requires `authorize("ADMIN")`. Follow
   this same `authenticate [, authorize(...)]` pattern when adding new protected routes.
@@ -126,24 +132,27 @@ route -> controller -> service pattern:
   a new client elsewhere.
 - `src/config.ts` — reads/validates process env (e.g. `JWT_SECRET`, `JWT_EXPIRES_IN`); read env
   vars through here rather than `process.env` directly.
-- `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts` —
-  map HTTP verbs/paths to controller functions, wrapped in `asyncHandler`
-  (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling middleware instead of
-  crashing silently. The item-scoped favorite routes (`/:id/favorite`) live in
-  `market.routes.ts`; the "my favorites" list route lives in `favorites.routes.ts`, mounted at
-  `/api/market/favorites` in `src/app.ts`.
+- `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts`,
+  `src/routes/users.routes.ts` — map HTTP verbs/paths to controller functions, wrapped in
+  `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling
+  middleware instead of crashing silently. The item-scoped favorite/review routes
+  (`/:id/favorite`, `/:id/reviews`) live in `market.routes.ts`; the "my favorites" list route
+  lives in `favorites.routes.ts` (mounted at `/api/market/favorites`); admin user management
+  lives in `users.routes.ts` (mounted at `/api/users`) — all in `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
   above).
 - `src/utils/pagination.ts` — `parsePagination(query)` parses/validates `page`/`limit` (default
   20, capped at 100); reused by every paginated list controller rather than reimplemented per
   controller.
 - `src/controllers/market.controller.ts`, `src/controllers/auth.controller.ts`,
-  `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts` —
-  parse/validate request data, call the service layer, shape HTTP responses/status codes.
+  `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts`,
+  `src/controllers/user.controller.ts` — parse/validate request data, call the service layer,
+  shape HTTP responses/status codes.
 - `src/services/market.service.ts`, `src/services/auth.service.ts`,
   `src/services/favorite.service.ts`, `src/services/review.service.ts`,
-  `src/services/rating.util.ts` — business logic and data access, backed by Prisma
-  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`). This is the layer to
+  `src/services/user.service.ts`, `src/services/rating.util.ts` — business logic and data access,
+  backed by Prisma (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`). This
+  is the layer to
   touch if the persistence approach changes; the controller/route layers don't need to know it's
   Postgres.
 - `src/types/market.types.ts`, `src/types/auth.types.ts`, `src/types/review.types.ts` — shared
@@ -154,6 +163,7 @@ route -> controller -> service pattern:
   changes).
 
 Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
-`tests/reviews.test.ts`) use `supertest` against the app built by `createApp()` and hit the real
-database configured by `DATABASE_URL` — they don't start a real network listener, but they are
+`tests/reviews.test.ts`, `tests/users.test.ts`) use `supertest` against the app built by
+`createApp()` and hit the real database configured by `DATABASE_URL` — they don't start a real
+network listener, but they are
 integration tests, not pure unit tests.
