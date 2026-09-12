@@ -5,6 +5,13 @@ via Prisma. It covers product listings, JWT authentication with role-based autho
 favorites, reviews, images, categories, stock/inventory, orders/checkout, product options
 (variants), shipping addresses, and admin reporting.
 
+## Screenshots
+
+| | |
+| --- | --- |
+| ![README rendered](docs/screenshots/readme.png) <br>README | ![Market item API response](docs/screenshots/api-response.png) <br>Market item response (category, options, favorites, reviews aggregated in one call) |
+| ![Test suite passing](docs/screenshots/tests-passing.png) <br>139/139 integration tests passing | ![CI on GitHub Actions](docs/screenshots/ci-github-actions.png) <br>Lint/build/test enforced on every push and PR via GitHub Actions |
+
 ## Tech stack
 
 - **Runtime**: Node.js (>= 18), TypeScript, Express
