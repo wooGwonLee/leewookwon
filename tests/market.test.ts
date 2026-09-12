@@ -57,6 +57,7 @@ describe("Market items API", () => {
     const getRes = await request(app).get(`/api/market/items/${id}`);
     expect(getRes.status).toBe(200);
     expect(getRes.body.name).toBe("Sample Product");
+    expect(getRes.body.viewCount).toBe(1);
 
     const updateRes = await request(app)
       .patch(`/api/market/items/${id}`)
@@ -103,6 +104,51 @@ describe("Market items API", () => {
       .delete("/api/market/items/00000000-0000-0000-0000-000000000000")
       .set("Authorization", `Bearer ${adminToken}`);
     expect(deleteRes.status).toBe(404);
+  });
+
+  describe("view count", () => {
+    it("starts at 0 and is not affected by listing", async () => {
+      const userToken = await registerAndLogin("viewer1@example.com", "USER");
+      const createRes = await request(app)
+        .post("/api/market/items")
+        .set("Authorization", `Bearer ${userToken}`)
+        .send({ name: "Viewed Item", price: 10 });
+      expect(createRes.body.viewCount).toBe(0);
+
+      const listRes = await request(app).get("/api/market/items");
+      expect(listRes.body.items[0].viewCount).toBe(0);
+    });
+
+    it("increments by 1 on each detail fetch", async () => {
+      const userToken = await registerAndLogin("viewer2@example.com", "USER");
+      const createRes = await request(app)
+        .post("/api/market/items")
+        .set("Authorization", `Bearer ${userToken}`)
+        .send({ name: "Viewed Item 2", price: 10 });
+      const { id } = createRes.body;
+
+      const firstView = await request(app).get(`/api/market/items/${id}`);
+      expect(firstView.body.viewCount).toBe(1);
+
+      const secondView = await request(app).get(`/api/market/items/${id}`);
+      expect(secondView.body.viewCount).toBe(2);
+
+      const thirdView = await request(app).get(`/api/market/items/${id}`);
+      expect(thirdView.body.viewCount).toBe(3);
+    });
+
+    it("does not bump updatedAt when only viewed", async () => {
+      const userToken = await registerAndLogin("viewer3@example.com", "USER");
+      const createRes = await request(app)
+        .post("/api/market/items")
+        .set("Authorization", `Bearer ${userToken}`)
+        .send({ name: "Viewed Item 3", price: 10 });
+      const { id, updatedAt } = createRes.body;
+
+      await request(app).get(`/api/market/items/${id}`);
+      const viewRes = await request(app).get(`/api/market/items/${id}`);
+      expect(viewRes.body.updatedAt).toBe(updatedAt);
+    });
   });
 
   describe("pagination", () => {

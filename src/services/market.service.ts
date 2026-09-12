@@ -49,7 +49,15 @@ export async function listItems(
   };
 }
 
-export function getItem(id: string): Promise<MarketItem | null> {
+export async function getItem(id: string): Promise<MarketItem | null> {
+  // Raw update so viewing an item bumps viewCount without touching the
+  // @updatedAt-managed updatedAt column (which should reflect content edits).
+  const affectedRows = await prisma.$executeRaw`
+    UPDATE "market_items" SET "viewCount" = "viewCount" + 1 WHERE "id" = ${id}
+  `;
+  if (affectedRows === 0) {
+    return null;
+  }
   return prisma.marketItem.findUnique({ where: { id } });
 }
 
