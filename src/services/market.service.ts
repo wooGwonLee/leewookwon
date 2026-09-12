@@ -76,8 +76,11 @@ function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
     where.categoryId = filters.categoryId;
   }
 
-  if (filters.inStock) {
-    where.stock = { gt: 0 };
+  if (filters.inStock || filters.maxStock !== undefined) {
+    where.stock = {
+      ...(filters.inStock && { gt: 0 }),
+      ...(filters.maxStock !== undefined && { lte: filters.maxStock }),
+    };
   }
 
   return where;

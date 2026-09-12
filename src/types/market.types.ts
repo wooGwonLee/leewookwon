@@ -36,6 +36,7 @@ export interface MarketItemFilters {
   maxPrice?: number;
   categoryId?: string;
   inStock?: boolean;
+  maxStock?: number;
 }
 
 export const SORTABLE_FIELDS = [

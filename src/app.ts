@@ -5,6 +5,7 @@ import favoritesRoutes from "./routes/favorites.routes";
 import usersRoutes from "./routes/users.routes";
 import categoriesRoutes from "./routes/categories.routes";
 import ordersRoutes from "./routes/orders.routes";
+import adminRoutes from "./routes/admin.routes";
 import { ensureUploadDirs, UPLOADS_ROOT } from "./upload";
 
 export function createApp(): Express {
@@ -24,6 +25,7 @@ export function createApp(): Express {
   app.use("/api/users", usersRoutes);
   app.use("/api/categories", categoriesRoutes);
   app.use("/api/orders", ordersRoutes);
+  app.use("/api/admin", adminRoutes);
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     console.error(err);

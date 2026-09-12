@@ -13,8 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   Postgres with migrations applied — see Database below; runs with `--runInBand` since test files
   (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`, `tests/reviews.test.ts`,
   `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`, `tests/stock.test.ts`,
-  `tests/orders.test.ts`, `tests/options.test.ts`) share one real database — and, for images, the
-  same `uploads/` directory on disk — and would otherwise race each other; every test file whose
+  `tests/orders.test.ts`, `tests/options.test.ts`, `tests/adminStats.test.ts`) share one real
+  database — and, for images, the same `uploads/` directory on disk — and would otherwise race
+  each other; every test file whose
   `beforeEach` wipes `marketItem` must also wipe `order` first, since `OrderItem.marketItem` is
   `onDelete: Restrict` — see Orders below. `MarketItemOption` doesn't need its own explicit
   cleanup — it cascade-deletes with its parent `marketItem`)
@@ -71,7 +72,11 @@ below).
 `marketService.listItems(page, limit, filters, sort)` (`src/services/market.service.ts`) builds a
 `Prisma.MarketItemWhereInput` from the filters, runs `findMany`/`count` in parallel, and returns
 `PaginatedResult<T>` (`src/types/market.types.ts`) — follow the same pattern for other list
-endpoints added later.
+endpoints added later. `MarketItemFilters` also has a `maxStock` field (`stock <= maxStock`) that
+`buildWhere` combines with `inStock` into a single `stock` condition — it's deliberately NOT wired
+up to `market.controller.ts`'s public query parsing, only called directly by
+`stats.controller.ts`'s low-stock endpoint (see Admin statistics below); add public query parsing
+for it too if a public "low stock" filter is ever wanted.
 
 Sorting: `sortBy` (one of `SORTABLE_FIELDS` in `src/types/market.types.ts` —
 `createdAt`/`price`/`viewCount`/`name`/`favoriteCount`/`reviewCount`/`stock`; default `createdAt`) and
@@ -299,6 +304,38 @@ convention like `"L / Red"` client-side. `MarketItemOption.marketItemId` is `onD
   options existed — this feature is purely additive, not a breaking change to the order flow for
   items without variants.
 
+## Admin statistics
+
+Read-only reporting endpoints for admins (`src/services/stats.service.ts`,
+`src/controllers/stats.controller.ts`, mounted at `/api/admin`, all three routes
+`authenticate` + `authorize("ADMIN")` — 401 unauthenticated, 403 non-admin):
+
+- `GET /api/admin/stats/summary` — `{ totalUsers, totalItems, totalOrders, ordersByStatus: {
+  PENDING, CONFIRMED, COMPLETED, CANCELLED }, totalRevenue, lowStockThreshold, lowStockItemCount
+  }`. Optional `lowStockThreshold` query param (default `5`, must be a non-negative integer, 400
+  otherwise) — an item counts as low-stock when `stock <= lowStockThreshold`. `totalRevenue` sums
+  `totalPrice` only across `COMPLETED` orders — deliberately not `PENDING`/`CONFIRMED` (not yet
+  realized sales) and not `CANCELLED` (never realized). `ordersByStatus` always includes all four
+  status keys (even `0`) rather than omitting statuses with no orders, so clients don't need to
+  default missing keys themselves.
+- `GET /api/admin/stats/top-items` — array of `{ marketItemId, name, totalQuantitySold,
+  totalRevenue }`, sorted by `totalQuantitySold` descending. Optional `limit` query param (default
+  `10`, must be a positive integer, 400 otherwise; capped at `MAX_LIMIT` from
+  `src/utils/pagination.ts`, same cap as regular pagination). Counts every `OrderItem` whose order
+  is NOT `CANCELLED` (so `PENDING`/`CONFIRMED`/`COMPLETED` all count as "sold", matching how stock
+  is already reserved for them) — `stats.service.ts`'s `getTopSellingItems` fetches the matching
+  `OrderItem` rows and aggregates `quantity`/`quantity * priceAtOrder` in memory per
+  `marketItemId`, rather than a Prisma `groupBy` `_sum`, because a `groupBy` sum of `priceAtOrder`
+  would add up per-unit prices instead of computing `quantity * priceAtOrder` per row — do the
+  same in-memory aggregation if you extend this, not a raw `groupBy` sum, or per-item revenue will
+  be wrong whenever any row has `quantity > 1`.
+- `GET /api/admin/stats/low-stock` — paginated (same `{ items, pagination }` shape as other list
+  endpoints), items with `stock <= threshold` (query param, default `5`, non-negative integer, 400
+  otherwise) sorted by `stock` ascending. Implemented by calling `marketService.listItems` with the
+  `maxStock` filter and an explicit `{ sortBy: "stock", sortOrder: "asc" }` sort — reuses the
+  existing list/pagination/aggregates machinery rather than a parallel query, so responses have the
+  same shape (favorites/reviews/images/options/category included) as every other item list.
+
 ## Aggregates on market item responses
 
 Every market item response (list, detail, create, update, and the favorites list) includes
@@ -330,15 +367,16 @@ route -> controller -> service pattern:
 - `src/upload.ts` — multer config (`uploadMarketItemImages`) and upload-directory constants/setup
   (`ensureUploadDirs`, `UPLOADS_ROOT`, `MARKET_ITEM_IMAGES_DIR`); see Product images below.
 - `src/routes/market.routes.ts`, `src/routes/auth.routes.ts`, `src/routes/favorites.routes.ts`,
-  `src/routes/users.routes.ts`, `src/routes/categories.routes.ts`, `src/routes/orders.routes.ts` —
-  map HTTP verbs/paths to controller functions, wrapped in `asyncHandler`
-  (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling middleware instead of
-  crashing silently. The item-scoped favorite/review/image/option routes (`/:id/favorite`,
-  `/:id/reviews`, `/:id/images`, `/:id/options`) live in `market.routes.ts`; the "my favorites"
-  list route lives in `favorites.routes.ts` (mounted at `/api/market/favorites`); admin user
-  management lives in `users.routes.ts` (mounted at `/api/users`); categories live in
+  `src/routes/users.routes.ts`, `src/routes/categories.routes.ts`, `src/routes/orders.routes.ts`,
+  `src/routes/admin.routes.ts` — map HTTP verbs/paths to controller functions, wrapped in
+  `asyncHandler` (`src/utils/asyncHandler.ts`) so rejected promises reach the error-handling
+  middleware instead of crashing silently. The item-scoped favorite/review/image/option routes
+  (`/:id/favorite`, `/:id/reviews`, `/:id/images`, `/:id/options`) live in `market.routes.ts`; the
+  "my favorites" list route lives in `favorites.routes.ts` (mounted at `/api/market/favorites`);
+  admin user management lives in `users.routes.ts` (mounted at `/api/users`); categories live in
   `categories.routes.ts` (mounted at `/api/categories`); orders live in `orders.routes.ts`
-  (mounted at `/api/orders`) — all in `src/app.ts`.
+  (mounted at `/api/orders`); admin stats live in `admin.routes.ts` (mounted at `/api/admin`) —
+  all in `src/app.ts`.
 - `src/middleware/auth.middleware.ts` — `authenticate`/`authorize` (see Authentication section
   above). `src/middleware/upload.middleware.ts` — `handleImageUpload` wraps the multer middleware
   so its errors become JSON 400s instead of uncaught exceptions.
@@ -349,22 +387,25 @@ route -> controller -> service pattern:
   `src/controllers/favorite.controller.ts`, `src/controllers/review.controller.ts`,
   `src/controllers/user.controller.ts`, `src/controllers/image.controller.ts`,
   `src/controllers/category.controller.ts`, `src/controllers/order.controller.ts`,
-  `src/controllers/option.controller.ts` — parse/validate request data, call the service layer,
-  shape HTTP responses/status codes.
+  `src/controllers/option.controller.ts`, `src/controllers/stats.controller.ts` — parse/validate
+  request data, call the service layer, shape HTTP responses/status codes.
 - `src/services/market.service.ts`, `src/services/auth.service.ts`,
   `src/services/favorite.service.ts`, `src/services/review.service.ts`,
   `src/services/user.service.ts`, `src/services/image.service.ts`, `src/services/category.service.ts`,
-  `src/services/order.service.ts`, `src/services/option.service.ts`, `src/services/rating.util.ts`
-  — business logic and data access, backed by Prisma (`prisma.marketItem`, `prisma.user`,
-  `prisma.favorite`, `prisma.review`, `prisma.marketItemImage`, `prisma.category`, `prisma.order`,
-  `prisma.orderItem`, `prisma.marketItemOption`). This is the layer to touch if the persistence
-  approach changes; the controller/route layers don't need to know it's Postgres (or, for images,
-  local disk).
+  `src/services/order.service.ts`, `src/services/option.service.ts`, `src/services/stats.service.ts`,
+  `src/services/rating.util.ts` — business logic and data access, backed by Prisma
+  (`prisma.marketItem`, `prisma.user`, `prisma.favorite`, `prisma.review`, `prisma.marketItemImage`,
+  `prisma.category`, `prisma.order`, `prisma.orderItem`, `prisma.marketItemOption`). This is the
+  layer to touch if the persistence approach changes; the controller/route layers don't need to
+  know it's Postgres (or, for images, local disk). `stats.service.ts` reads across several tables
+  but writes nothing of its own — no new Prisma model backs it.
 - `src/types/market.types.ts`, `src/types/auth.types.ts`, `src/types/review.types.ts`,
-  `src/types/category.types.ts`, `src/types/order.types.ts`, `src/types/option.types.ts` — shared
-  TypeScript types, re-exporting Prisma-generated types (`MarketItem`, `MarketItemImage`, `Role`,
-  `Review`, `Category`, `Order`, `OrderItem`, `OrderStatus`, `MarketItemOption`) alongside request
-  input shapes.
+  `src/types/category.types.ts`, `src/types/order.types.ts`, `src/types/option.types.ts`,
+  `src/types/stats.types.ts` — shared TypeScript types, re-exporting Prisma-generated types
+  (`MarketItem`, `MarketItemImage`, `Role`, `Review`, `Category`, `Order`, `OrderItem`,
+  `OrderStatus`, `MarketItemOption`) alongside request input shapes; `stats.types.ts` is
+  response-shape types only (`StatsSummary`, `TopSellingItem`), since admin stats have no request
+  input beyond query params.
 - `prisma/schema.prisma` — the
   `MarketItem`/`User`/`Role`/`Favorite`/`Review`/`MarketItemImage`/`Category`/`Order`/`OrderItem`/`OrderStatus`/`MarketItemOption`
   models and datasource config; `prisma/migrations/` holds the generated SQL migrations (commit
@@ -372,6 +413,7 @@ route -> controller -> service pattern:
 
 Tests (`tests/market.test.ts`, `tests/auth.test.ts`, `tests/favorites.test.ts`,
 `tests/reviews.test.ts`, `tests/users.test.ts`, `tests/images.test.ts`, `tests/categories.test.ts`,
-`tests/stock.test.ts`, `tests/orders.test.ts`, `tests/options.test.ts`) use `supertest` against the
-app built by `createApp()` and hit the real database configured by `DATABASE_URL` — they don't
-start a real network listener, but they are integration tests, not pure unit tests.
+`tests/stock.test.ts`, `tests/orders.test.ts`, `tests/options.test.ts`,
+`tests/adminStats.test.ts`) use `supertest` against the app built by `createApp()` and hit the real
+database configured by `DATABASE_URL` — they don't start a real network listener, but they are
+integration tests, not pure unit tests.
