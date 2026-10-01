@@ -63,7 +63,9 @@ bcrypt (`bcryptjs`); tokens are signed with `JWT_SECRET` (`src/config.ts`) and c
 `GET /api/market/items` takes `page` (default 1) and `limit` (default 20, capped at 100) query
 params and returns `{ items, pagination: { page, limit, total, totalPages } }` rather than a bare
 array — a non-integer or non-positive `page`/`limit` returns 400. It also takes an optional `q`
-(case-insensitive substring match against `name` OR `description`), `minPrice`/`maxPrice`
+(case-insensitive substring match against `name` OR `description` OR the item's `category.name`
+— so searching "electronics" also surfaces items merely categorized under a category named
+"Electronics", not just ones whose own name/description mentions it), `minPrice`/`maxPrice`
 (inclusive price range; a negative, non-numeric, or inverted min/max returns 400), `categoryId`
 (exact match; an unknown/nonexistent id just yields an empty page, not an error — see Categories
 below for why filtering doesn't validate the id), and `inStock` (`inStock=true` restricts to

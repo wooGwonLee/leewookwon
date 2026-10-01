@@ -62,6 +62,7 @@ function buildWhere(filters: MarketItemFilters): Prisma.MarketItemWhereInput {
     where.OR = [
       { name: { contains: filters.q, mode: "insensitive" } },
       { description: { contains: filters.q, mode: "insensitive" } },
+      { category: { name: { contains: filters.q, mode: "insensitive" } } },
     ];
   }
 
