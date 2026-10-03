@@ -253,6 +253,25 @@ describe("Market items API", () => {
       ]);
     });
 
+    it("searches by the item's category name too", async () => {
+      const adminToken = await registerAndLogin("searchadmin@example.com", "ADMIN");
+      const categoryRes = await request(app)
+        .post("/api/categories")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ name: "Outdoor Gear" });
+      const categoryId = categoryRes.body.id;
+
+      const categorizedRes = await request(app)
+        .post("/api/market/items")
+        .set("Authorization", `Bearer ${userToken}`)
+        .send({ name: "Tent", price: 200, description: "Four-person camping tent", categoryId });
+      const categorizedId = categorizedRes.body.id;
+
+      const res = await request(app).get("/api/market/items?q=outdoor");
+      expect(res.status).toBe(200);
+      expect(res.body.items.map((i: { id: string }) => i.id)).toEqual([categorizedId]);
+    });
+
     it("rejects invalid price filter params", async () => {
       const negative = await request(app).get("/api/market/items?minPrice=-5");
       expect(negative.status).toBe(400);
